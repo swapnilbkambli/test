@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html>
+<head>
+<style>
+  /* Base styles */
+  .content { display: none; overflow: hidden; }
+  
+  /* The Magic: When input is checked, show the content sibling */
+  #toggle-1:checked ~ .content {
+    display: block !important;
+    max-height: 500px; /* Animate height if supported */
+  }
+
+  /* Styling the toggle button */
+  .toggle-label {
+    cursor: pointer;
+    display: block;
+    background: #f0f0f0;
+    padding: 10px;
+    font-family: sans-serif;
+    user-select: none;
+  }
+  
+  /* Hide the actual checkbox */
+  input[type=checkbox] {
+    display: none;
+    mso-hide: all; /* Hide from older Outlooks */
+  }
+</style>
+</head>
+<body>
+
+  <div style="border:1px solid #ddd; max-width: 600px; margin: auto;">
+    
+    <input type="checkbox" id="toggle-1">
+    
+    <label for="toggle-1" class="toggle-label">
+      ▼ Click to Expand Section
+    </label>
+    
+    <div class="content">
+      <div style="padding: 15px; background: #fff;">
+        <p>This is the hidden content! It appears because the checkbox above is checked.</p>
+        <p>No JavaScript was used here.</p>
+      </div>
+    </div>
+
+  </div>
+
+</body>
+</html>
