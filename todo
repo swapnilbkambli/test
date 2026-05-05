@@ -1,0 +1,1716 @@
+#python C:\Users\1672557\Downloads\todo_tracker\todo_tracker.py
+import tkinter as tk
+from tkinter import filedialog
+import json
+import os
+import csv
+import shutil
+import threading
+from datetime import datetime, timedelta
+import pystray
+from PIL import Image, ImageDraw
+import keyboard
+
+TASKS_FILE    = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tasks.json")
+SETTINGS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "settings.json")
+BACKUP_DIR    = os.path.join(os.path.dirname(os.path.abspath(__file__)), "backups")
+
+DEFAULT_SETTINGS = {
+    "summary_time": "09:00",
+}
+
+
+def load_settings():
+    if os.path.exists(SETTINGS_FILE):
+        try:
+            with open(SETTINGS_FILE, "r") as f:
+                s = json.load(f)
+            return {**DEFAULT_SETTINGS, **s}
+        except Exception:
+            pass
+    return dict(DEFAULT_SETTINGS)
+
+
+def save_settings(s):
+    with open(SETTINGS_FILE, "w") as f:
+        json.dump(s, f, indent=2)
+
+PRIORITIES = {
+    "high":   {"icon": "ðŸ”´", "label": "High",   "sort": 0},
+    "medium": {"icon": "ðŸŸ¡", "label": "Medium", "sort": 1},
+    "low":    {"icon": "ðŸŸ¢", "label": "Low",    "sort": 2},
+    "none":   {"icon": "âšª", "label": "None",   "sort": 3},
+}
+
+COLORS = {
+    "default": {"bg": "white",   "fg": "#333333"},
+    "red":     {"bg": "#ffe0e0", "fg": "#c00000"},
+    "orange":  {"bg": "#fff3e0", "fg": "#e65100"},
+    "yellow":  {"bg": "#fffde7", "fg": "#c47800"},
+    "green":   {"bg": "#e8f5e9", "fg": "#2e7d32"},
+    "blue":    {"bg": "#e3f2fd", "fg": "#1565c0"},
+    "purple":  {"bg": "#f3e5f5", "fg": "#6a1b9a"},
+}
+
+DARK = {
+    "bg": "#1e1e1e", "fg": "#d4d4d4", "header": "#252526",
+    "row_bg": "#252526", "row_fg": "#d4d4d4",
+    "done_bg": "#2d2d2d", "done_fg": "#666666",
+    "entry_bg": "#3c3c3c", "status": "#252526",
+    "select": "#094771", "overdue": "#ff6b6b", "pin_bg": "#2a2a1a",
+}
+LIGHT = {
+    "bg": "#f3f3f3", "fg": "#333333", "header": "#0078d4",
+    "row_bg": "white", "row_fg": "#333333",
+    "done_bg": "#f8f8f8", "done_fg": "#aaaaaa",
+    "entry_bg": "white", "status": "#dddddd",
+    "select": "#0078d4", "overdue": "#c00000", "pin_bg": "#fffbf0",
+}
+
+
+def load_tasks():
+    if os.path.exists(TASKS_FILE):
+        with open(TASKS_FILE, "r") as f:
+            return json.load(f)
+    return []
+
+
+def save_tasks(tasks):
+    with open(TASKS_FILE, "w") as f:
+        json.dump(tasks, f, indent=2)
+
+
+def auto_backup():
+    if not os.path.exists(TASKS_FILE):
+        return
+    os.makedirs(BACKUP_DIR, exist_ok=True)
+    stamp = datetime.now().strftime("%Y-%m-%d")
+    dest = os.path.join(BACKUP_DIR, f"tasks_{stamp}.json")
+    if not os.path.exists(dest):
+        shutil.copy2(TASKS_FILE, dest)
+    backups = sorted(f for f in os.listdir(BACKUP_DIR) if f.endswith(".json"))
+    for old in backups[:-30]:
+        os.remove(os.path.join(BACKUP_DIR, old))
+
+
+def create_icon_image(badge=0):
+    img = Image.new("RGBA", (64, 64), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(img)
+    draw.rectangle([0, 0, 63, 63], fill=(0, 120, 212))
+    draw.rectangle([8, 12, 56, 52], outline="white", width=3)
+    draw.line([16, 24, 24, 34], fill="white", width=3)
+    draw.line([24, 34, 48, 16], fill="white", width=3)
+    draw.line([16, 40, 48, 40], fill="white", width=2)
+    if badge > 0:
+        draw.ellipse([36, 0, 63, 27], fill=(220, 50, 50))
+        draw.text((50, 14), str(min(badge, 99)), fill="white", anchor="mm")
+    return img
+
+
+class TodoApp:
+    def __init__(self):
+        self.tasks = load_tasks()
+        self.window = None
+        self.tray_icon = None
+        self.displayed_tasks = []
+        self._drag_start_index = None
+        self._drag_start_y = None
+        self._dark_mode = False
+        self._last_backup_date = None
+        self._daily_summary_shown = False
+        self.settings = load_settings()
+
+    # â”€â”€ Theme â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+
+    @property
+    def T(self):
+        return DARK if self._dark_mode else LIGHT
+
+    def toggle_dark_mode(self):
+        self._dark_mode = not self._dark_mode
+        for w in self.window.winfo_children():
+            w.destroy()
+        self._build_ui()
+        self.refresh_tasks()
+
+    # â”€â”€ UI â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+
+    def create_window(self):
+        self.window = tk.Tk()
+        self.window.title("Todo Tracker")
+        self.window.geometry("580x660")
+        self.window.resizable(True, True)
+        self.window.configure(bg=self.T["bg"])
+        self.window.attributes("-topmost", True)
+        self.window.update_idletasks()
+        x = (self.window.winfo_screenwidth() // 2) - 290
+        y = (self.window.winfo_screenheight() // 2) - 330
+        self.window.geometry(f"580x660+{x}+{y}")
+        self.window.bind("<Escape>", lambda e: self.hide_window())
+        self.window.protocol("WM_DELETE_WINDOW", self.hide_window)
+        self._build_ui()
+        self.refresh_tasks()
+
+    def _build_ui(self):
+        T = self.T
+        self.window.configure(bg=T["bg"])
+
+        # â”€â”€ Header â”€â”€
+        header = tk.Frame(self.window, bg=T["header"], pady=8)
+        header.pack(fill=tk.X)
+        tk.Label(header, text="ðŸ“‹  Todo Tracker", font=("Segoe UI", 13, "bold"),
+                 bg=T["header"], fg="white").pack(side=tk.LEFT, padx=12)
+        for icon, cmd, tip in [
+            ("âš™",  self._show_settings, "Settings"),
+            ("ðŸ“Š", self._show_stats,    "Stats"),
+            ("ðŸ’¾", self._export_csv,    "Export CSV"),
+            ("ðŸŒ™" if not self._dark_mode else "â˜€", self.toggle_dark_mode, "Dark/Light"),
+        ]:
+            tk.Button(header, text=icon, command=cmd,
+                      font=("Segoe UI", 12), bg=T["header"], fg="white",
+                      relief=tk.FLAT, bd=0, cursor="hand2",
+                      activebackground=T["header"], activeforeground="white"
+                      ).pack(side=tk.RIGHT, padx=4)
+
+        # â”€â”€ Search + Date filter â”€â”€
+        f0 = tk.Frame(self.window, bg=T["bg"], pady=4)
+        f0.pack(fill=tk.X, padx=12)
+        tk.Label(f0, text="ðŸ”", font=("Segoe UI", 11), bg=T["bg"], fg=T["fg"]).pack(side=tk.LEFT)
+        self.search_var = tk.StringVar()
+        self.search_var.trace_add("write", lambda *_: self.refresh_tasks())
+        tk.Entry(f0, textvariable=self.search_var, width=16,
+                 font=("Segoe UI", 10), relief=tk.FLAT,
+                 bg=T["entry_bg"], fg=T["fg"],
+                 highlightthickness=1, highlightbackground="#999"
+                 ).pack(side=tk.LEFT, padx=(2, 8), ipady=3)
+        tk.Label(f0, text="Date:", font=("Segoe UI", 9), bg=T["bg"], fg=T["fg"]).pack(side=tk.LEFT)
+        self.date_var = tk.StringVar(value=datetime.now().strftime("%Y-%m-%d"))
+        tk.Entry(f0, textvariable=self.date_var, width=11,
+                 font=("Segoe UI", 10), relief=tk.FLAT,
+                 bg=T["entry_bg"], fg=T["fg"],
+                 highlightthickness=1, highlightbackground="#999"
+                 ).pack(side=tk.LEFT, padx=4, ipady=3)
+        tk.Button(f0, text="Today", command=self.set_today,
+                  font=("Segoe UI", 9), bg="#0078d4", fg="white",
+                  relief=tk.FLAT, padx=5).pack(side=tk.LEFT, padx=2)
+        tk.Button(f0, text="All", command=self.show_all,
+                  font=("Segoe UI", 9), bg="#555", fg="white",
+                  relief=tk.FLAT, padx=5).pack(side=tk.LEFT, padx=2)
+
+        # â”€â”€ Filter row (tag / project / archived) â”€â”€
+        f0b = tk.Frame(self.window, bg=T["bg"], pady=2)
+        f0b.pack(fill=tk.X, padx=12)
+        tk.Label(f0b, text="ðŸ·Tag:", font=("Segoe UI", 9), bg=T["bg"], fg=T["fg"]).pack(side=tk.LEFT)
+        self.tag_filter_var = tk.StringVar()
+        self.tag_filter_var.trace_add("write", lambda *_: self.refresh_tasks())
+        tk.Entry(f0b, textvariable=self.tag_filter_var, width=10,
+                 font=("Segoe UI", 9), relief=tk.FLAT,
+                 bg=T["entry_bg"], fg=T["fg"],
+                 highlightthickness=1, highlightbackground="#999"
+                 ).pack(side=tk.LEFT, padx=(2, 8), ipady=2)
+        tk.Label(f0b, text="ðŸ“Project:", font=("Segoe UI", 9), bg=T["bg"], fg=T["fg"]).pack(side=tk.LEFT)
+        self.proj_filter_var = tk.StringVar()
+        self.proj_filter_var.trace_add("write", lambda *_: self.refresh_tasks())
+        tk.Entry(f0b, textvariable=self.proj_filter_var, width=10,
+                 font=("Segoe UI", 9), relief=tk.FLAT,
+                 bg=T["entry_bg"], fg=T["fg"],
+                 highlightthickness=1, highlightbackground="#999"
+                 ).pack(side=tk.LEFT, padx=(2, 8), ipady=2)
+        self.show_archived_var = tk.BooleanVar(value=False)
+        tk.Checkbutton(f0b, text="ðŸ“¦ Archived", variable=self.show_archived_var,
+                       command=self.refresh_tasks,
+                       font=("Segoe UI", 9), bg=T["bg"], fg=T["fg"],
+                       selectcolor=T["bg"], activebackground=T["bg"]
+                       ).pack(side=tk.LEFT)
+
+        # â”€â”€ Add task row 1: text + priority + reminder â”€â”€
+        f2 = tk.Frame(self.window, bg=T["bg"], pady=3)
+        f2.pack(fill=tk.X, padx=12)
+        self.task_var = tk.StringVar()
+        entry = tk.Entry(f2, textvariable=self.task_var,
+                         font=("Segoe UI", 10), relief=tk.FLAT,
+                         bg=T["entry_bg"], fg=T["fg"],
+                         highlightthickness=1, highlightbackground="#999")
+        entry.pack(side=tk.LEFT, expand=True, fill=tk.X, padx=(0, 4), ipady=4)
+        entry.bind("<Return>", lambda e: self.add_task())
+        self.priority_var = tk.StringVar(value="none")
+        pri_menu = tk.OptionMenu(f2, self.priority_var, "none", "low", "medium", "high")
+        pri_menu.config(font=("Segoe UI", 9), bg=T["entry_bg"], fg=T["fg"],
+                        relief=tk.FLAT, width=6, highlightthickness=0)
+        pri_menu.pack(side=tk.LEFT, padx=(0, 4))
+        tk.Label(f2, text="â°", font=("Segoe UI", 10), bg=T["bg"], fg=T["fg"]).pack(side=tk.LEFT)
+        self.reminder_var = tk.StringVar()
+        rem_ent = tk.Entry(f2, textvariable=self.reminder_var, width=6,
+                           font=("Segoe UI", 9), relief=tk.FLAT,
+                           bg=T["entry_bg"], fg=T["fg"],
+                           highlightthickness=1, highlightbackground="#999")
+        rem_ent.pack(side=tk.LEFT, padx=(2, 4), ipady=4)
+        rem_ent.insert(0, "HH:MM")
+        rem_ent.bind("<FocusIn>", lambda e: rem_ent.delete(0, tk.END) if rem_ent.get() == "HH:MM" else None)
+        rem_ent.bind("<Return>", lambda e: self.add_task())
+        tk.Button(f2, text="+ Add", command=self.add_task,
+                  font=("Segoe UI", 10, "bold"), bg="#0078d4", fg="white",
+                  relief=tk.FLAT, padx=8, pady=3).pack(side=tk.LEFT)
+
+        # â”€â”€ Add task row 2: tags / project / due / pin â”€â”€
+        f2b = tk.Frame(self.window, bg=T["bg"], pady=2)
+        f2b.pack(fill=tk.X, padx=12)
+        for label, var_name, w in [("ðŸ·", "tags_var", 12), ("ðŸ“", "project_var", 10)]:
+            tk.Label(f2b, text=label, font=("Segoe UI", 9), bg=T["bg"], fg=T["fg"]).pack(side=tk.LEFT)
+            setattr(self, var_name, tk.StringVar())
+            tk.Entry(f2b, textvariable=getattr(self, var_name), width=w,
+                     font=("Segoe UI", 9), relief=tk.FLAT,
+                     bg=T["entry_bg"], fg=T["fg"],
+                     highlightthickness=1, highlightbackground="#999"
+                     ).pack(side=tk.LEFT, padx=(2, 6), ipady=2)
+        tk.Label(f2b, text="ðŸ“…Due:", font=("Segoe UI", 9), bg=T["bg"], fg=T["fg"]).pack(side=tk.LEFT)
+        self.due_var = tk.StringVar()
+        tk.Entry(f2b, textvariable=self.due_var, width=11,
+                 font=("Segoe UI", 9), relief=tk.FLAT,
+                 bg=T["entry_bg"], fg=T["fg"],
+                 highlightthickness=1, highlightbackground="#999"
+                 ).pack(side=tk.LEFT, padx=(2, 6), ipady=2)
+        self.pin_var = tk.BooleanVar(value=False)
+        tk.Checkbutton(f2b, text="ðŸ“ŒPin", variable=self.pin_var,
+                       font=("Segoe UI", 9), bg=T["bg"], fg=T["fg"],
+                       selectcolor=T["bg"], activebackground=T["bg"]).pack(side=tk.LEFT)
+
+        # â”€â”€ Add task row 3: notes / recurring â”€â”€
+        f2c = tk.Frame(self.window, bg=T["bg"], pady=1)
+        f2c.pack(fill=tk.X, padx=12)
+        tk.Label(f2c, text="ðŸ“Notes:", font=("Segoe UI", 9), bg=T["bg"], fg=T["fg"]).pack(side=tk.LEFT)
+        self.notes_var = tk.StringVar()
+        tk.Entry(f2c, textvariable=self.notes_var,
+                 font=("Segoe UI", 9), relief=tk.FLAT,
+                 bg=T["entry_bg"], fg=T["fg"],
+                 highlightthickness=1, highlightbackground="#999"
+                 ).pack(side=tk.LEFT, expand=True, fill=tk.X, padx=(2, 6), ipady=2)
+        tk.Label(f2c, text="ðŸ”", font=("Segoe UI", 9), bg=T["bg"], fg=T["fg"]).pack(side=tk.LEFT)
+        self.recur_var = tk.StringVar(value="none")
+        recur_menu = tk.OptionMenu(f2c, self.recur_var, "none", "daily", "weekly", "monthly")
+        recur_menu.config(font=("Segoe UI", 9), bg=T["entry_bg"], fg=T["fg"],
+                          relief=tk.FLAT, width=6, highlightthickness=0)
+        recur_menu.pack(side=tk.LEFT, padx=(2, 0))
+
+        # â”€â”€ Task list â”€â”€
+        f3 = tk.Frame(self.window, bg=T["bg"])
+        f3.pack(fill=tk.BOTH, expand=True, padx=12, pady=4)
+        sb = tk.Scrollbar(f3)
+        sb.pack(side=tk.RIGHT, fill=tk.Y)
+        self.listbox = tk.Listbox(f3, font=("Segoe UI", 10),
+                                  yscrollcommand=sb.set,
+                                  selectmode=tk.SINGLE,
+                                  relief=tk.FLAT, bg=T["row_bg"], fg=T["row_fg"],
+                                  selectbackground=T["select"],
+                                  activestyle="none", bd=1)
+        self.listbox.pack(fill=tk.BOTH, expand=True)
+        sb.config(command=self.listbox.yview)
+        self.listbox.bind("<Double-1>", self._on_double_click)
+        self.listbox.bind("<Button-3>", self._on_right_click)
+        self.listbox.bind("<ButtonPress-1>", self._drag_start)
+        self.listbox.bind("<B1-Motion>", self._drag_motion)
+        self.listbox.bind("<ButtonRelease-1>", self._drag_release)
+        # Keyboard shortcuts
+        self.listbox.bind("<Delete>", lambda e: self.delete_task())
+        self.listbox.bind("<space>", lambda e: self._on_double_click(e))
+        self.listbox.bind("e", lambda e: self._edit_selected())
+        self.listbox.bind("n", lambda e: self._notes_selected())
+        self.listbox.bind("p", lambda e: self._pin_selected())
+
+        # â”€â”€ Action buttons â”€â”€
+        f4 = tk.Frame(self.window, bg=T["bg"], pady=4)
+        f4.pack(fill=tk.X, padx=12)
+        btns = [
+            ("âœ“ Complete", "#107c10", self.complete_task),
+            ("ðŸ—‘ Delete",   "#d13438", self.delete_task),
+            ("ðŸ“¦ Archive",  "#6b6b6b", self.archive_task),
+        ]
+        for txt, col, cmd in btns:
+            tk.Button(f4, text=txt, command=cmd, font=("Segoe UI", 10),
+                      bg=col, fg="white", relief=tk.FLAT, padx=8, pady=3
+                      ).pack(side=tk.LEFT, padx=(0, 4))
+        tk.Button(f4, text="âœ• Close [Esc]", command=self.hide_window,
+                  font=("Segoe UI", 10), bg="#555", fg="white",
+                  relief=tk.FLAT, padx=8, pady=3).pack(side=tk.RIGHT)
+        tk.Label(f4, text="Del Â· Space Â· E Â· N Â· P",
+                 font=("Segoe UI", 8), bg=T["bg"], fg="#999").pack(side=tk.RIGHT, padx=6)
+
+        # â”€â”€ Status bar â”€â”€
+        self.status_var = tk.StringVar(value="Ready")
+        tk.Label(self.window, textvariable=self.status_var,
+                 font=("Segoe UI", 9), bg=T["status"], fg=T["fg"],
+                 anchor=tk.W, padx=8, pady=3).pack(fill=tk.X, side=tk.BOTTOM)
+
+    # â”€â”€ Task operations â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+
+    def refresh_tasks(self):
+        if not self.window or not self.window.winfo_exists():
+            return
+        T = self.T
+        date_filter   = self.date_var.get().strip() if hasattr(self, "date_var") else ""
+        search_text   = self.search_var.get().strip().lower() if hasattr(self, "search_var") else ""
+        tag_filter    = self.tag_filter_var.get().strip().lower() if hasattr(self, "tag_filter_var") else ""
+        proj_filter   = self.proj_filter_var.get().strip().lower() if hasattr(self, "proj_filter_var") else ""
+        show_archived = self.show_archived_var.get() if hasattr(self, "show_archived_var") else False
+        self.listbox.delete(0, tk.END)
+        self.displayed_tasks = []
+        today = datetime.now().strftime("%Y-%m-%d")
+        filtered = []
+        for t in self.tasks:
+            if t.get("archived") and not show_archived:
+                continue
+            if date_filter and t["date"] != date_filter:
+                continue
+            if search_text and search_text not in t["text"].lower() \
+                    and search_text not in t.get("notes", "").lower():
+                continue
+            if tag_filter and tag_filter not in " ".join(t.get("tags", [])).lower():
+                continue
+            if proj_filter and proj_filter not in t.get("project", "").lower():
+                continue
+            filtered.append(t)
+
+        def sort_key(t):
+            pinned = 0 if t.get("pinned") else 1
+            done   = 1 if t.get("done") else 0
+            pri    = PRIORITIES.get(t.get("priority", "none"), PRIORITIES["none"])["sort"]
+            return (pinned, done, pri)
+
+        for task in sorted(filtered, key=sort_key):
+            self.displayed_tasks.append(task)
+            status    = "âœ“" if task["done"] else "â—‹"
+            icons     = "".join(x for x in [
+                "ðŸ“Œ" if task.get("pinned") else "",
+                PRIORITIES.get(task.get("priority", "none"), PRIORITIES["none"])["icon"]
+                    if task.get("priority", "none") != "none" else "",
+                "ðŸ”" if task.get("recurring", "none") not in ("none", None, "") else "",
+                "ðŸ“" if task.get("notes") else "",
+                "ðŸ“¦" if task.get("archived") else "",
+            ] if x)
+            reminder = task.get("reminder", "")
+            rem_date = task.get("reminder_date", task["date"])
+            if reminder and not task["done"]:
+                rem_str = f" â°{rem_date} {reminder}" if rem_date != task["date"] else f" â°{reminder}"
+            else:
+                rem_str = ""
+            tags_str = (" [" + " ".join("#" + tg for tg in task.get("tags", [])) + "]") \
+                if task.get("tags") else ""
+            proj_str = (f" ðŸ“{task['project']}") if task.get("project") else ""
+            due_str  = (f" ðŸ“…{task['due_date']}") if task.get("due_date") else ""
+            prefix   = f" {icons}" if icons else ""
+            line = f"  {status}{prefix}  [{task['date']}]{due_str}{rem_str}{proj_str}{tags_str}  {task['text']}"
+            self.listbox.insert(tk.END, line)
+
+            is_overdue = (not task["done"] and task.get("due_date") and task["due_date"] < today)
+            if task.get("archived"):
+                self.listbox.itemconfig(tk.END, fg="#888888", bg=T["done_bg"])
+            elif task["done"]:
+                self.listbox.itemconfig(tk.END, fg=T["done_fg"], bg=T["done_bg"])
+            elif is_overdue:
+                self.listbox.itemconfig(tk.END, fg=T["overdue"],
+                                        bg="#fff0f0" if not self._dark_mode else "#3a1a1a")
+            else:
+                if self._dark_mode:
+                    c_bg, c_fg = T["pin_bg"] if task.get("pinned") else T["row_bg"], T["row_fg"]
+                else:
+                    c = COLORS.get(task.get("color", "default"), COLORS["default"])
+                    c_bg = T["pin_bg"] if task.get("pinned") else c["bg"]
+                    c_fg = c["fg"]
+                self.listbox.itemconfig(tk.END, fg=c_fg, bg=c_bg)
+
+        pending = sum(1 for t in self.tasks if not t["done"] and not t.get("archived"))
+        self.status_var.set(
+            f"{len(filtered)} shown  |  {pending} pending  |  Ctrl+Alt+T  |  DelÂ·SpaceÂ·EÂ·NÂ·P"
+        )
+        self._update_tray_badge(pending)
+
+    def add_task(self):
+        text = self.task_var.get().strip()
+        if not text:
+            return
+        date = self.date_var.get().strip() or datetime.now().strftime("%Y-%m-%d")
+        reminder = self.reminder_var.get().strip()
+        if reminder in ("HH:MM", ""):
+            reminder = ""
+        else:
+            try:
+                datetime.strptime(reminder, "%H:%M")
+            except ValueError:
+                reminder = ""
+        raw_tags = self.tags_var.get().strip()
+        tags = [t.lstrip("#").strip() for t in raw_tags.replace(",", " ").split() if t.strip()]
+        due = self.due_var.get().strip()
+        if due:
+            try:
+                datetime.strptime(due, "%Y-%m-%d")
+            except ValueError:
+                due = ""
+        self.tasks.append({
+            "text":          text,
+            "date":          date,
+            "done":          False,
+            "color":         "default",
+            "priority":      self.priority_var.get(),
+            "reminder":      reminder,
+            "reminder_date": date if reminder else "",
+            "reminded":      False,
+            "tags":          tags,
+            "project":       self.project_var.get().strip(),
+            "due_date":      due,
+            "notes":         self.notes_var.get().strip(),
+            "pinned":        self.pin_var.get(),
+            "recurring":     self.recur_var.get(),
+            "archived":      False,
+            "created":       datetime.now().isoformat(),
+        })
+        save_tasks(self.tasks)
+        for v in (self.task_var, self.reminder_var, self.tags_var,
+                  self.notes_var, self.due_var, self.project_var):
+            v.set("")
+        self.priority_var.set("none")
+        self.recur_var.set("none")
+        self.pin_var.set(False)
+        self.refresh_tasks()
+
+    def _on_double_click(self, event):
+        sel = self.listbox.curselection()
+        if not sel:
+            return
+        task = self.displayed_tasks[sel[0]]
+        task["done"] = not task["done"]
+        if task["done"] and task.get("recurring", "none") not in ("none", None, ""):
+            self._create_recurring(task)
+        save_tasks(self.tasks)
+        self.refresh_tasks()
+
+    def _create_recurring(self, task):
+        delta_map = {"daily": 1, "weekly": 7, "monthly": 30}
+        days = delta_map.get(task.get("recurring", "none"), 0)
+        if not days:
+            return
+        try:
+            base = datetime.strptime(task["date"], "%Y-%m-%d")
+        except ValueError:
+            base = datetime.now()
+        next_date = (base + timedelta(days=days)).strftime("%Y-%m-%d")
+        new_task = {k: v for k, v in task.items()}
+        new_task["done"]         = False
+        new_task["date"]         = next_date
+        new_task["reminded"]     = False
+        new_task["created"]      = datetime.now().isoformat()
+        if task.get("reminder"):
+            new_task["reminder_date"] = next_date
+        self.tasks.append(new_task)
+
+    def _on_right_click(self, event):
+        index = self.listbox.nearest(event.y)
+        if index < 0 or index >= len(self.displayed_tasks):
+            return
+        self.listbox.selection_clear(0, tk.END)
+        self.listbox.selection_set(index)
+        task = self.displayed_tasks[index]
+        menu = tk.Menu(self.window, tearoff=0)
+        menu.add_command(label="Mark Incomplete" if task["done"] else "âœ“  Mark Complete",
+                         command=lambda: self._toggle_done(index))
+        menu.add_command(label="âœ  Edit Task  [E]", command=lambda: self._edit_task(index))
+        menu.add_command(label="ðŸ“  Notes  [N]",    command=lambda: self._edit_notes(index))
+        menu.add_separator()
+        pri_menu = tk.Menu(menu, tearoff=0)
+        for k, v in PRIORITIES.items():
+            pri_menu.add_command(label=f"{v['icon']}  {v['label']}",
+                                 command=lambda kk=k, ii=index: self._set_priority(ii, kk))
+        menu.add_cascade(label="ðŸŽ¯  Set Priority", menu=pri_menu)
+        color_menu = tk.Menu(menu, tearoff=0)
+        for clabel, ckey in [
+            ("â¬œ  Default", "default"), ("ðŸ”´  Red", "red"), ("ðŸŸ   Orange", "orange"),
+            ("ðŸŸ¡  Yellow", "yellow"),  ("ðŸŸ¢  Green", "green"),
+            ("ðŸ”µ  Blue", "blue"),      ("ðŸŸ£  Purple", "purple"),
+        ]:
+            color_menu.add_command(label=clabel,
+                                   command=lambda k=ckey, i=index: self._set_color(i, k))
+        menu.add_cascade(label="ðŸŽ¨  Set Color", menu=color_menu)
+        menu.add_command(label="â°  Set Reminder",
+                         command=lambda: self._set_reminder_dialog(index))
+        menu.add_separator()
+        menu.add_command(label="ðŸ“Œ  Unpin  [P]" if task.get("pinned") else "ðŸ“Œ  Pin to Top  [P]",
+                         command=lambda: self._toggle_pin(index))
+        menu.add_command(label="ðŸ“¦  Unarchive" if task.get("archived") else "ðŸ“¦  Archive",
+                         command=lambda: self._toggle_archive(index))
+        menu.add_separator()
+        menu.add_command(label="ðŸ—‘  Delete", command=self.delete_task)
+        menu.tk_popup(event.x_root, event.y_root)
+
+    def _toggle_done(self, index):
+        task = self.displayed_tasks[index]
+        task["done"] = not task["done"]
+        if task["done"] and task.get("recurring", "none") not in ("none", None, ""):
+            self._create_recurring(task)
+        save_tasks(self.tasks)
+        self.refresh_tasks()
+
+    def _toggle_pin(self, index):
+        self.displayed_tasks[index]["pinned"] = not self.displayed_tasks[index].get("pinned", False)
+        save_tasks(self.tasks)
+        self.refresh_tasks()
+
+    def _toggle_archive(self, index):
+        self.displayed_tasks[index]["archived"] = not self.displayed_tasks[index].get("archived", False)
+        save_tasks(self.tasks)
+        self.refresh_tasks()
+
+    def _edit_selected(self):
+        sel = self.listbox.curselection()
+        if sel:
+            self._edit_task(sel[0])
+
+    def _notes_selected(self):
+        sel = self.listbox.curselection()
+        if sel:
+            self._edit_notes(sel[0])
+
+    def _pin_selected(self):
+        sel = self.listbox.curselection()
+        if sel:
+            self._toggle_pin(sel[0])
+
+    def _set_priority(self, index, key):
+        self.displayed_tasks[index]["priority"] = key
+        save_tasks(self.tasks)
+        self.refresh_tasks()
+
+    def _set_color(self, index, color_key):
+        self.displayed_tasks[index]["color"] = color_key
+        save_tasks(self.tasks)
+        self.refresh_tasks()
+
+    def _edit_task(self, index):
+        task = self.displayed_tasks[index]
+        win = tk.Toplevel(self.window)
+        win.title("âœ  Edit Task")
+        win.geometry("440x140")
+        win.resizable(False, False)
+        win.configure(bg=self.T["bg"])
+        win.attributes("-topmost", True)
+        win.grab_set()
+        win.update_idletasks()
+        x = self.window.winfo_x() + self.window.winfo_width() // 2 - 220
+        y = self.window.winfo_y() + self.window.winfo_height() // 2 - 70
+        win.geometry(f"440x140+{x}+{y}")
+        tk.Label(win, text="Task text:", font=("Segoe UI", 10),
+                 bg=self.T["bg"], fg=self.T["fg"]).pack(anchor=tk.W, padx=12, pady=(12, 4))
+        var = tk.StringVar(value=task["text"])
+        ent = tk.Entry(win, textvariable=var, font=("Segoe UI", 10),
+                       bg=self.T["entry_bg"], fg=self.T["fg"],
+                       relief=tk.FLAT, highlightthickness=1, highlightbackground="#999")
+        ent.pack(fill=tk.X, padx=12, ipady=4)
+        ent.select_range(0, tk.END)
+        ent.focus_set()
+        def save(event=None):
+            v = var.get().strip()
+            if v:
+                task["text"] = v
+                save_tasks(self.tasks)
+                self.refresh_tasks()
+            win.destroy()
+        ent.bind("<Return>", save)
+        win.bind("<Escape>", lambda e: win.destroy())
+        bf = tk.Frame(win, bg=self.T["bg"])
+        bf.pack(fill=tk.X, padx=12, pady=8)
+        tk.Button(bf, text="Save", command=save, font=("Segoe UI", 10),
+                  bg="#0078d4", fg="white", relief=tk.FLAT, padx=10, pady=3
+                  ).pack(side=tk.LEFT, padx=(0, 6))
+        tk.Button(bf, text="Cancel", command=win.destroy, font=("Segoe UI", 10),
+                  bg="#555", fg="white", relief=tk.FLAT, padx=10, pady=3).pack(side=tk.LEFT)
+
+    def _edit_notes(self, index):
+        task = self.displayed_tasks[index]
+        win = tk.Toplevel(self.window)
+        win.title(f"ðŸ“  Notes â€” {task['text'][:40]}")
+        win.geometry("440x230")
+        win.resizable(True, True)
+        win.configure(bg=self.T["bg"])
+        win.attributes("-topmost", True)
+        win.grab_set()
+        win.update_idletasks()
+        x = self.window.winfo_x() + self.window.winfo_width() // 2 - 220
+        y = self.window.winfo_y() + self.window.winfo_height() // 2 - 115
+        win.geometry(f"440x230+{x}+{y}")
+        tk.Label(win, text="Notes:", font=("Segoe UI", 10),
+                 bg=self.T["bg"], fg=self.T["fg"]).pack(anchor=tk.W, padx=12, pady=(10, 4))
+        txt = tk.Text(win, font=("Segoe UI", 10), wrap=tk.WORD,
+                      bg=self.T["entry_bg"], fg=self.T["fg"],
+                      relief=tk.FLAT, highlightthickness=1, highlightbackground="#999", height=7)
+        txt.pack(fill=tk.BOTH, expand=True, padx=12)
+        txt.insert("1.0", task.get("notes", ""))
+        txt.focus_set()
+        def save():
+            task["notes"] = txt.get("1.0", tk.END).strip()
+            save_tasks(self.tasks)
+            self.refresh_tasks()
+            win.destroy()
+        win.bind("<Escape>", lambda e: win.destroy())
+        bf = tk.Frame(win, bg=self.T["bg"])
+        bf.pack(fill=tk.X, padx=12, pady=8)
+        tk.Button(bf, text="Save", command=save, font=("Segoe UI", 10),
+                  bg="#0078d4", fg="white", relief=tk.FLAT, padx=10, pady=3
+                  ).pack(side=tk.LEFT, padx=(0, 6))
+        tk.Button(bf, text="Cancel", command=win.destroy, font=("Segoe UI", 10),
+                  bg="#555", fg="white", relief=tk.FLAT, padx=10, pady=3).pack(side=tk.LEFT)
+
+    # â”€â”€ Reminder â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+
+    def _set_reminder_dialog(self, index):
+        task = self.displayed_tasks[index]
+        dlg = tk.Toplevel(self.window)
+        dlg.title("â°  Set Reminder")
+        dlg.geometry("430x355")
+        dlg.resizable(False, False)
+        dlg.configure(bg=self.T["bg"])
+        dlg.attributes("-topmost", True)
+        dlg.grab_set()
+        dlg.update_idletasks()
+        x = (dlg.winfo_screenwidth() // 2) - 215
+        y = (dlg.winfo_screenheight() // 2) - 177
+        dlg.geometry(f"430x355+{x}+{y}")
+        BG, FG = self.T["bg"], self.T["fg"]
+        rd_var = tk.StringVar(value=task.get("reminder_date") or task.get("date", ""))
+        rt_var = tk.StringVar(value=task.get("reminder", ""))
+
+        def apply_delta(delta_minutes=None, delta_days=None, hour=9):
+            now = datetime.now()
+            if delta_minutes is not None:
+                t = now + timedelta(minutes=delta_minutes)
+                rd_var.set(t.strftime("%Y-%m-%d")); rt_var.set(t.strftime("%H:%M"))
+            elif delta_days is not None:
+                t = now + timedelta(days=delta_days)
+                rd_var.set(t.strftime("%Y-%m-%d")); rt_var.set(f"{hour:02d}:00")
+
+        def save_and_close():
+            dv, tv = rd_var.get().strip(), rt_var.get().strip()
+            if tv:
+                try: datetime.strptime(tv, "%H:%M")
+                except ValueError: tv = ""
+            if dv:
+                try: datetime.strptime(dv, "%Y-%m-%d")
+                except ValueError: dv = ""
+            task["reminder"] = tv; task["reminder_date"] = dv if tv else ""
+            task["reminded"] = False
+            save_tasks(self.tasks); self.refresh_tasks(); dlg.destroy()
+
+        def clear_and_close():
+            task["reminder"] = ""; task["reminder_date"] = ""; task["reminded"] = False
+            save_tasks(self.tasks); self.refresh_tasks(); dlg.destroy()
+
+        tk.Label(dlg, text="Quick reminders", font=("Segoe UI", 9, "bold"),
+                 bg=BG, fg="#888").pack(anchor="w", padx=16, pady=(12, 2))
+        row1 = tk.Frame(dlg, bg=BG); row1.pack(fill=tk.X, padx=14, pady=2)
+        for lbl, m in [("15 min", 15), ("30 min", 30), ("1 hour", 60), ("2 hours", 120), ("4 hours", 240)]:
+            tk.Button(row1, text=lbl, font=("Segoe UI", 9), bg="#e1efff", fg="#0050a0",
+                      relief=tk.FLAT, padx=6, pady=3,
+                      command=lambda mm=m: [apply_delta(delta_minutes=mm), save_and_close()]
+                      ).pack(side=tk.LEFT, padx=3)
+        row2 = tk.Frame(dlg, bg=BG); row2.pack(fill=tk.X, padx=14, pady=2)
+        for lbl, d in [("Tomorrow", 1), ("2 days", 2), ("3 days", 3), ("Next week", 7), ("2 weeks", 14)]:
+            tk.Button(row2, text=lbl, font=("Segoe UI", 9), bg="#e8f5e9", fg="#1b5e20",
+                      relief=tk.FLAT, padx=6, pady=3,
+                      command=lambda dd=d: [apply_delta(delta_days=dd, hour=9), save_and_close()]
+                      ).pack(side=tk.LEFT, padx=3)
+        tk.Frame(dlg, bg="#ccc", height=1).pack(fill=tk.X, padx=14, pady=6)
+        crow = tk.Frame(dlg, bg=BG); crow.pack(fill=tk.X, padx=14, pady=2)
+        tk.Label(crow, text="In", font=("Segoe UI", 10), bg=BG, fg=FG).pack(side=tk.LEFT)
+        amt_var = tk.StringVar(value="1")
+        tk.Spinbox(crow, from_=1, to=999, textvariable=amt_var, width=4,
+                   font=("Segoe UI", 10)).pack(side=tk.LEFT, padx=5)
+        unit_var = tk.StringVar(value="hours")
+        tk.OptionMenu(crow, unit_var, "hours", "days", "weeks").pack(side=tk.LEFT)
+        def apply_custom():
+            try: amt = int(amt_var.get())
+            except ValueError: return
+            u = unit_var.get()
+            if u == "hours": apply_delta(delta_minutes=amt * 60)
+            elif u == "days": apply_delta(delta_days=amt, hour=9)
+            elif u == "weeks": apply_delta(delta_days=amt * 7, hour=9)
+            save_and_close()
+        tk.Button(crow, text="Set â†’", command=apply_custom,
+                  font=("Segoe UI", 9, "bold"), bg="#0078d4", fg="white",
+                  relief=tk.FLAT, padx=8, pady=2).pack(side=tk.LEFT, padx=8)
+        tk.Frame(dlg, bg="#ccc", height=1).pack(fill=tk.X, padx=14, pady=6)
+        erow = tk.Frame(dlg, bg=BG); erow.pack(fill=tk.X, padx=14, pady=2)
+        tk.Label(erow, text="Date:", font=("Segoe UI", 10), bg=BG, fg=FG).pack(side=tk.LEFT)
+        tk.Entry(erow, textvariable=rd_var, width=12, font=("Segoe UI", 10),
+                 bg=self.T["entry_bg"], fg=FG, relief=tk.FLAT,
+                 highlightthickness=1, highlightbackground="#999"
+                 ).pack(side=tk.LEFT, padx=5, ipady=3)
+        tk.Label(erow, text="Time:", font=("Segoe UI", 10), bg=BG, fg=FG).pack(side=tk.LEFT)
+        tk.Entry(erow, textvariable=rt_var, width=7, font=("Segoe UI", 10),
+                 bg=self.T["entry_bg"], fg=FG, relief=tk.FLAT,
+                 highlightthickness=1, highlightbackground="#999"
+                 ).pack(side=tk.LEFT, padx=5, ipady=3)
+        brow = tk.Frame(dlg, bg=BG); brow.pack(fill=tk.X, padx=14, pady=(10, 8))
+        tk.Button(brow, text="âœ“  Set Reminder", command=save_and_close,
+                  font=("Segoe UI", 10, "bold"), bg="#0078d4", fg="white",
+                  relief=tk.FLAT, padx=10, pady=4).pack(side=tk.LEFT, padx=(0, 6))
+        tk.Button(brow, text="âœ•  Clear", command=clear_and_close,
+                  font=("Segoe UI", 10), bg="#d13438", fg="white",
+                  relief=tk.FLAT, padx=10, pady=4).pack(side=tk.LEFT, padx=(0, 6))
+        tk.Button(brow, text="Cancel", command=dlg.destroy,
+                  font=("Segoe UI", 10), bg="#555", fg="white",
+                  relief=tk.FLAT, padx=10, pady=4).pack(side=tk.LEFT)
+        dlg.bind("<Escape>", lambda e: dlg.destroy())
+
+    def _show_reminder_popup(self, task):
+        popup = tk.Toplevel()
+        popup.title("â° Reminder")
+        popup.geometry("420x200")
+        popup.resizable(False, False)
+        popup.configure(bg="#fff3e0")
+        popup.attributes("-topmost", True)
+        popup.lift(); popup.focus_force()
+        popup.update_idletasks()
+        x = (popup.winfo_screenwidth() // 2) - 210
+        y = (popup.winfo_screenheight() // 2) - 100
+        popup.geometry(f"420x200+{x}+{y}")
+        tk.Label(popup, text="â°  Reminder!", font=("Segoe UI", 13, "bold"),
+                 bg="#fff3e0", fg="#e65100").pack(pady=(14, 4))
+        tk.Label(popup, text=task["text"], font=("Segoe UI", 11),
+                 bg="#fff3e0", fg="#333", wraplength=380).pack(pady=4)
+        rem_date = task.get("reminder_date") or task["date"]
+        tk.Label(popup, text=f"Scheduled: {rem_date}  {task.get('reminder', '')}",
+                 font=("Segoe UI", 9), bg="#fff3e0", fg="#888").pack()
+        bf = tk.Frame(popup, bg="#fff3e0"); bf.pack(pady=10)
+        tk.Button(bf, text="âœ“  Done",
+                  command=lambda: [self._mark_reminded_done(task), popup.destroy()],
+                  font=("Segoe UI", 10), bg="#107c10", fg="white",
+                  relief=tk.FLAT, padx=10, pady=4).pack(side=tk.LEFT, padx=4)
+        tk.Button(bf, text="ðŸ’¤ 10 min",
+                  command=lambda: [self._snooze(task, 10), popup.destroy()],
+                  font=("Segoe UI", 10), bg="#0078d4", fg="white",
+                  relief=tk.FLAT, padx=10, pady=4).pack(side=tk.LEFT, padx=4)
+        tk.Button(bf, text="ðŸ’¤ 1 hour",
+                  command=lambda: [self._snooze(task, 60), popup.destroy()],
+                  font=("Segoe UI", 10), bg="#0078d4", fg="white",
+                  relief=tk.FLAT, padx=10, pady=4).pack(side=tk.LEFT, padx=4)
+        tk.Button(bf, text="Dismiss",
+                  command=lambda: [self._mark_reminded(task), popup.destroy()],
+                  font=("Segoe UI", 10), bg="#555", fg="white",
+                  relief=tk.FLAT, padx=10, pady=4).pack(side=tk.LEFT, padx=4)
+
+    def _snooze(self, task, minutes):
+        t = datetime.now() + timedelta(minutes=minutes)
+        task["reminder"]      = t.strftime("%H:%M")
+        task["reminder_date"] = t.strftime("%Y-%m-%d")
+        task["reminded"]      = False
+        save_tasks(self.tasks)
+        self.refresh_tasks()
+
+    def _mark_reminded(self, task):
+        task["reminded"] = True; save_tasks(self.tasks)
+
+    def _mark_reminded_done(self, task):
+        task["reminded"] = True; task["done"] = True
+        if task.get("recurring", "none") not in ("none", None, ""):
+            self._create_recurring(task)
+        save_tasks(self.tasks); self.refresh_tasks()
+
+    def _reminder_checker(self):
+        while True:
+            threading.Event().wait(30)
+            now      = datetime.now()
+            today    = now.strftime("%Y-%m-%d")
+            now_hhmm = now.strftime("%H:%M")
+            # Daily summary at configured time
+            summary_time = self.settings.get("summary_time", "09:00")
+            if now_hhmm == summary_time and not self._daily_summary_shown:
+                self._daily_summary_shown = True
+                if self.window and self.window.winfo_exists():
+                    self.window.after(0, self._show_daily_summary)
+            if now_hhmm != summary_time:
+                self._daily_summary_shown = False
+            # Auto-backup
+            if self._last_backup_date != today:
+                self._last_backup_date = today
+                auto_backup()
+            # Reminders
+            for task in self.tasks:
+                rem_date = task.get("reminder_date") or task.get("date", "")
+                if (task.get("reminder") and not task.get("done") and
+                        not task.get("reminded") and
+                        rem_date == today and task["reminder"] <= now_hhmm):
+                    if self.window and self.window.winfo_exists():
+                        self.window.after(0, lambda t=task: self._show_reminder_popup(t))
+
+    def _show_daily_summary(self):
+        today = datetime.now().strftime("%Y-%m-%d")
+        pending = [t for t in self.tasks
+                   if not t["done"] and not t.get("archived") and t["date"] == today]
+        if not pending:
+            return
+        popup = tk.Toplevel()
+        popup.title("ðŸ“‹  Today's Tasks")
+        popup.geometry("380x300")
+        popup.resizable(True, True)
+        popup.configure(bg="#e8f0fe")
+        popup.attributes("-topmost", True)
+        popup.lift(); popup.focus_force()
+        popup.update_idletasks()
+        x = (popup.winfo_screenwidth() // 2) - 190
+        y = (popup.winfo_screenheight() // 2) - 150
+        popup.geometry(f"380x300+{x}+{y}")
+        tk.Label(popup, text=f"ðŸ“‹  Good morning!  {len(pending)} task(s) today",
+                 font=("Segoe UI", 12, "bold"), bg="#e8f0fe", fg="#1a237e").pack(pady=(16, 8))
+        lb = tk.Listbox(popup, font=("Segoe UI", 10), bg="white", relief=tk.FLAT, bd=1, height=10)
+        lb.pack(fill=tk.BOTH, expand=True, padx=12)
+        for t in pending:
+            pri = PRIORITIES.get(t.get("priority", "none"), PRIORITIES["none"])["icon"]
+            lb.insert(tk.END, f"  {pri}  {t['text']}")
+        bf = tk.Frame(popup, bg="#e8f0fe"); bf.pack(pady=8)
+        tk.Button(bf, text="Open Tracker",
+                  command=lambda: [self.show_window(), popup.destroy()],
+                  font=("Segoe UI", 10), bg="#0078d4", fg="white",
+                  relief=tk.FLAT, padx=10, pady=4).pack(side=tk.LEFT, padx=6)
+        tk.Button(bf, text="Dismiss", command=popup.destroy,
+                  font=("Segoe UI", 10), bg="#555", fg="white",
+                  relief=tk.FLAT, padx=10, pady=4).pack(side=tk.LEFT)
+
+    # â”€â”€ Tray badge â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+
+    def _update_tray_badge(self, pending):
+        if self.tray_icon:
+            try:
+                self.tray_icon.icon  = create_icon_image(pending)
+                self.tray_icon.title = f"Todo Tracker  ({pending} pending)"
+            except Exception:
+                pass
+
+    # â”€â”€ Settings â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+
+    def _show_settings(self):
+        win = tk.Toplevel(self.window)
+        win.title("âš™  Settings")
+        win.geometry("380x200")
+        win.resizable(False, False)
+        win.configure(bg=self.T["bg"])
+        win.attributes("-topmost", True)
+        win.grab_set()
+        win.update_idletasks()
+        x = self.window.winfo_x() + self.window.winfo_width() // 2 - 190
+        y = self.window.winfo_y() + 60
+        win.geometry(f"380x200+{x}+{y}")
+        BG, FG = self.T["bg"], self.T["fg"]
+
+        tk.Label(win, text="âš™  Settings", font=("Segoe UI", 12, "bold"),
+                 bg=BG, fg=FG).pack(pady=(16, 12))
+
+        row = tk.Frame(win, bg=BG); row.pack(fill=tk.X, padx=24, pady=4)
+        tk.Label(row, text="ðŸ“‹  Daily summary time (HH:MM):",
+                 font=("Segoe UI", 10), bg=BG, fg=FG).pack(side=tk.LEFT)
+        time_var = tk.StringVar(value=self.settings.get("summary_time", "09:00"))
+        ent = tk.Entry(row, textvariable=time_var, width=7,
+                       font=("Segoe UI", 11), justify="center", relief=tk.FLAT,
+                       bg=self.T["entry_bg"], fg=FG,
+                       highlightthickness=1, highlightbackground="#999")
+        ent.pack(side=tk.LEFT, padx=(10, 0), ipady=4)
+        ent.focus_set()
+
+        hint = tk.Label(win, text="Popup shows today's tasks at this time each day.",
+                        font=("Segoe UI", 9), bg=BG, fg="#888")
+        hint.pack(pady=(4, 0))
+
+        def save():
+            val = time_var.get().strip()
+            try:
+                datetime.strptime(val, "%H:%M")
+            except ValueError:
+                hint.config(text="Invalid â€” use HH:MM  e.g. 08:30", fg="#d13438")
+                return
+            self.settings["summary_time"] = val
+            save_settings(self.settings)
+            self._daily_summary_shown = False
+            hint.config(text=f"âœ“  Saved â€” summary will show at {val} each day.", fg="#107c10")
+
+        ent.bind("<Return>", lambda e: save())
+        win.bind("<Escape>", lambda e: win.destroy())
+        bf = tk.Frame(win, bg=BG); bf.pack(pady=10)
+        tk.Button(bf, text="Save", command=save, font=("Segoe UI", 10),
+                  bg="#0078d4", fg="white", relief=tk.FLAT, padx=12, pady=4
+                  ).pack(side=tk.LEFT, padx=(0, 8))
+        tk.Button(bf, text="Close", command=win.destroy, font=("Segoe UI", 10),
+                  bg="#555", fg="white", relief=tk.FLAT, padx=12, pady=4
+                  ).pack(side=tk.LEFT)
+
+    # â”€â”€ Export & Stats â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+
+    def _export_csv(self):
+        path = filedialog.asksaveasfilename(
+            defaultextension=".csv",
+            filetypes=[("CSV files", "*.csv")],
+            initialfile=f"tasks_{datetime.now().strftime('%Y%m%d')}.csv",
+        )
+        if not path:
+            return
+        fields = ["text", "date", "done", "priority", "color", "tags", "project",
+                  "due_date", "notes", "pinned", "recurring", "archived",
+                  "reminder", "reminder_date", "created"]
+        with open(path, "w", newline="", encoding="utf-8") as f:
+            w = csv.DictWriter(f, fieldnames=fields)
+            w.writeheader()
+            for t in self.tasks:
+                row = dict(t)
+                row["tags"] = " ".join(t.get("tags", []))
+                w.writerow({k: row.get(k, "") for k in fields})
+        self.status_var.set(f"Exported â†’ {os.path.basename(path)}")
+
+    def _show_stats(self):
+        win = tk.Toplevel(self.window)
+        win.title("ðŸ“Š  Productivity Stats")
+        win.geometry("480x370")
+        win.resizable(False, False)
+        win.configure(bg=self.T["bg"])
+        win.attributes("-topmost", True)
+        win.update_idletasks()
+        x = self.window.winfo_x() + self.window.winfo_width() // 2 - 240
+        y = self.window.winfo_y() + 40
+        win.geometry(f"480x370+{x}+{y}")
+        today      = datetime.now().strftime("%Y-%m-%d")
+        week_start = (datetime.now() - timedelta(days=6)).strftime("%Y-%m-%d")
+        done_today  = sum(1 for t in self.tasks if t["done"] and t["date"] == today)
+        total_today = sum(1 for t in self.tasks if t["date"] == today)
+        done_week   = sum(1 for t in self.tasks if t["done"] and t["date"] >= week_start)
+        total_week  = sum(1 for t in self.tasks if t["date"] >= week_start)
+        pending_all = sum(1 for t in self.tasks if not t["done"] and not t.get("archived"))
+        overdue     = sum(1 for t in self.tasks
+                          if not t["done"] and t.get("due_date") and t["due_date"] < today)
+        archived    = sum(1 for t in self.tasks if t.get("archived"))
+        BG, FG = self.T["bg"], self.T["fg"]
+        tk.Label(win, text="ðŸ“Š  Productivity Stats", font=("Segoe UI", 13, "bold"),
+                 bg=BG, fg=FG).pack(pady=(14, 8))
+        grid = tk.Frame(win, bg=BG); grid.pack(padx=20, pady=4)
+        pct = f"{int(done_week / total_week * 100)}%" if total_week else "â€”"
+        stats = [
+            ("Today Done",    done_today,  "#107c10"), ("Today Total",   total_today, "#0078d4"),
+            ("Week Done",     done_week,   "#5c2d91"), ("Week Total",    total_week,  "#004e8c"),
+            ("Pending",       pending_all, "#e65100"), ("Overdue",       overdue,     "#c00000"),
+            ("Archived",      archived,    "#555555"), ("Week %",        pct,         "#2e7d32"),
+        ]
+        for i, (lbl, val, col) in enumerate(stats):
+            card = tk.Frame(grid, bg=col, padx=14, pady=8)
+            card.grid(row=i // 4, column=i % 4, padx=5, pady=5)
+            tk.Label(card, text=str(val), font=("Segoe UI", 18, "bold"),
+                     bg=col, fg="white").pack()
+            tk.Label(card, text=lbl, font=("Segoe UI", 8),
+                     bg=col, fg="white").pack()
+        # Bar chart â€” last 7 days
+        tk.Label(win, text="Completed â€” last 7 days",
+                 font=("Segoe UI", 9, "bold"), bg=BG, fg=FG).pack(pady=(10, 2))
+        canvas = tk.Canvas(win, width=440, height=85, bg=BG, highlightthickness=0)
+        canvas.pack(padx=20)
+        days_data = []
+        for i in range(6, -1, -1):
+            d = (datetime.now() - timedelta(days=i)).strftime("%Y-%m-%d")
+            cnt = sum(1 for t in self.tasks if t["done"] and t["date"] == d)
+            days_data.append((d[-5:], cnt))
+        max_val = max(v for _, v in days_data) or 1
+        bar_w, gap = 44, 16
+        for idx, (day, val) in enumerate(days_data):
+            x0 = gap + idx * (bar_w + gap)
+            bh = int(val / max_val * 55) if val else 2
+            y0 = 70 - bh
+            canvas.create_rectangle(x0, y0, x0 + bar_w, 70, fill="#0078d4", outline="")
+            canvas.create_text(x0 + bar_w // 2, 78, text=day, font=("Segoe UI", 7), fill=FG, anchor="n")
+            if val:
+                canvas.create_text(x0 + bar_w // 2, y0 - 4, text=str(val),
+                                   font=("Segoe UI", 8, "bold"), fill=FG)
+        tk.Button(win, text="Close", command=win.destroy, font=("Segoe UI", 10),
+                  bg="#555", fg="white", relief=tk.FLAT, padx=12, pady=4).pack(pady=10)
+
+    # â”€â”€ Task list actions â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+
+    def complete_task(self):
+        sel = self.listbox.curselection()
+        if not sel:
+            return
+        task = self.displayed_tasks[sel[0]]
+        task["done"] = True
+        if task.get("recurring", "none") not in ("none", None, ""):
+            self._create_recurring(task)
+        save_tasks(self.tasks)
+        self.refresh_tasks()
+
+    def delete_task(self):
+        sel = self.listbox.curselection()
+        if not sel:
+            return
+        self.tasks.remove(self.displayed_tasks[sel[0]])
+        save_tasks(self.tasks)
+        self.refresh_tasks()
+
+    def archive_task(self):
+        sel = self.listbox.curselection()
+        if not sel:
+            return
+        self.displayed_tasks[sel[0]]["archived"] = True
+        save_tasks(self.tasks)
+        self.refresh_tasks()
+
+    def set_today(self):
+        self.date_var.set(datetime.now().strftime("%Y-%m-%d"))
+        self.refresh_tasks()
+
+    def show_all(self):
+        self.date_var.set("")
+        self.refresh_tasks()
+
+    def _drag_start(self, event):
+        self._drag_start_index = self.listbox.nearest(event.y)
+        self._drag_start_y = event.y
+
+    def _drag_motion(self, event):
+        if self._drag_start_index is None:
+            return
+        current = self.listbox.nearest(event.y)
+        if current != self._drag_start_index:
+            self.listbox.selection_clear(0, tk.END)
+            self.listbox.selection_set(current)
+            self.listbox.itemconfig(current, bg="#cce4ff")
+
+    def _drag_release(self, event):
+        if self._drag_start_index is None:
+            return
+        end_index = self.listbox.nearest(event.y)
+        if abs(event.y - self._drag_start_y) > 8 and end_index != self._drag_start_index:
+            task = self.displayed_tasks[self._drag_start_index]
+            target = self.displayed_tasks[end_index]
+            si, ti = self.tasks.index(task), self.tasks.index(target)
+            self.tasks.insert(ti, self.tasks.pop(si))
+            save_tasks(self.tasks)
+            self.refresh_tasks()
+            self.listbox.selection_set(end_index)
+        self._drag_start_index = None
+        self._drag_start_y = None
+
+    # â”€â”€ Window visibility â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+
+    def hide_window(self):
+        if self.window and self.window.winfo_exists():
+            self.window.withdraw()
+
+    def show_window(self):
+        if self.window and self.window.winfo_exists():
+            self.window.deiconify()
+            self.window.lift()
+            self.window.focus_force()
+            self.refresh_tasks()
+
+    def toggle_window(self):
+        if self.window and self.window.winfo_exists():
+            if self.window.state() == "withdrawn":
+                self.window.after(0, self.show_window)
+            else:
+                self.window.after(0, self.hide_window)
+
+    # â”€â”€ Tray â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+
+    def _run_tray(self):
+        menu = pystray.Menu(
+            pystray.MenuItem("Open / Hide  (Ctrl+Alt+T)",
+                             lambda: self.window.after(0, self.toggle_window)),
+            pystray.Menu.SEPARATOR,
+            pystray.MenuItem("Quit", self.quit_app),
+        )
+        self.tray_icon = pystray.Icon(
+            "todo_tracker", create_icon_image(), "Todo Tracker", menu
+        )
+        self.tray_icon.run()
+
+    def quit_app(self, *_):
+        if self.tray_icon:
+            self.tray_icon.stop()
+        if self.window:
+            self.window.destroy()
+        os._exit(0)
+
+    # â”€â”€ Entry point â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+
+    def run(self):
+        self.create_window()
+        threading.Thread(target=self._run_tray, daemon=True).start()
+        threading.Thread(target=self._reminder_checker, daemon=True).start()
+        keyboard.add_hotkey("ctrl+alt+t", self.toggle_window)
+        self.window.mainloop()
+
+
+if __name__ == "__main__":
+    app = TodoApp()
+    app.run()
+
+
+    # â”€â”€ UI â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+
+    def create_window(self):
+        self.window = tk.Tk()
+        self.window.title("Todo Tracker")
+        self.window.geometry("520x580")
+        self.window.resizable(True, True)
+        self.window.configure(bg="#f3f3f3")
+        self.window.attributes("-topmost", True)
+
+        # Center on screen
+        self.window.update_idletasks()
+        x = (self.window.winfo_screenwidth() // 2) - 260
+        y = (self.window.winfo_screenheight() // 2) - 290
+        self.window.geometry(f"520x580+{x}+{y}")
+
+        self.window.bind("<Escape>", lambda e: self.hide_window())
+        self.window.protocol("WM_DELETE_WINDOW", self.hide_window)
+
+        self._build_ui()
+        self.refresh_tasks()
+
+    def _build_ui(self):
+        # â”€â”€ Header â”€â”€
+        header = tk.Frame(self.window, bg="#0078d4", pady=10)
+        header.pack(fill=tk.X)
+        tk.Label(header, text="ðŸ“‹  Todo Tracker", font=("Segoe UI", 14, "bold"),
+                 bg="#0078d4", fg="white").pack()
+
+        # â”€â”€ Date filter â”€â”€
+        f1 = tk.Frame(self.window, bg="#f3f3f3", pady=6)
+        f1.pack(fill=tk.X, padx=12)
+        tk.Label(f1, text="Date (YYYY-MM-DD):", font=("Segoe UI", 9),
+                 bg="#f3f3f3").pack(side=tk.LEFT)
+        self.date_var = tk.StringVar(value=datetime.now().strftime("%Y-%m-%d"))
+        tk.Entry(f1, textvariable=self.date_var, width=13,
+                 font=("Segoe UI", 10)).pack(side=tk.LEFT, padx=5)
+        tk.Button(f1, text="Today", command=self.set_today,
+                  font=("Segoe UI", 9), bg="#0078d4", fg="white",
+                  relief=tk.FLAT, padx=6).pack(side=tk.LEFT, padx=2)
+        tk.Button(f1, text="All", command=self.show_all,
+                  font=("Segoe UI", 9), bg="#555555", fg="white",
+                  relief=tk.FLAT, padx=6).pack(side=tk.LEFT, padx=2)
+        tk.Button(f1, text="Filter", command=self.refresh_tasks,
+                  font=("Segoe UI", 9), bg="#107c10", fg="white",
+                  relief=tk.FLAT, padx=6).pack(side=tk.LEFT, padx=2)
+
+        # â”€â”€ Add task â”€â”€
+        f2 = tk.Frame(self.window, bg="#f3f3f3", pady=4)
+        f2.pack(fill=tk.X, padx=12)
+        self.task_var = tk.StringVar()
+        entry = tk.Entry(f2, textvariable=self.task_var,
+                         font=("Segoe UI", 10), relief=tk.FLAT,
+                         highlightthickness=1, highlightbackground="#ccc")
+        entry.pack(side=tk.LEFT, expand=True, fill=tk.X, padx=(0, 6), ipady=4)
+        entry.bind("<Return>", lambda e: self.add_task())
+
+        # Reminder time
+        tk.Label(f2, text="â°", font=("Segoe UI", 11), bg="#f3f3f3").pack(side=tk.LEFT)
+        self.reminder_var = tk.StringVar()
+        rem_entry = tk.Entry(f2, textvariable=self.reminder_var, width=6,
+                             font=("Segoe UI", 10), relief=tk.FLAT,
+                             highlightthickness=1, highlightbackground="#ccc")
+        rem_entry.pack(side=tk.LEFT, padx=(2, 6), ipady=4)
+        rem_entry.insert(0, "HH:MM")
+        rem_entry.bind("<FocusIn>",
+                       lambda e: rem_entry.delete(0, tk.END)
+                       if rem_entry.get() == "HH:MM" else None)
+        rem_entry.bind("<Return>", lambda e: self.add_task())
+
+        tk.Button(f2, text="+ Add Task", command=self.add_task,
+                  font=("Segoe UI", 10, "bold"), bg="#0078d4", fg="white",
+                  relief=tk.FLAT, padx=10, pady=4).pack(side=tk.LEFT)
+
+        # â”€â”€ Task list â”€â”€
+        f3 = tk.Frame(self.window, bg="#f3f3f3")
+        f3.pack(fill=tk.BOTH, expand=True, padx=12, pady=4)
+        sb = tk.Scrollbar(f3)
+        sb.pack(side=tk.RIGHT, fill=tk.Y)
+        self.listbox = tk.Listbox(f3, font=("Segoe UI", 10),
+                                  yscrollcommand=sb.set,
+                                  selectmode=tk.SINGLE,
+                                  relief=tk.FLAT, bg="white",
+                                  selectbackground="#0078d4",
+                                  activestyle="none", bd=1)
+        self.listbox.pack(fill=tk.BOTH, expand=True)
+        sb.config(command=self.listbox.yview)
+        self.listbox.bind("<Double-1>", self._on_double_click)
+        self.listbox.bind("<Button-3>", self._on_right_click)
+        self.listbox.bind("<ButtonPress-1>", self._drag_start)
+        self.listbox.bind("<B1-Motion>", self._drag_motion)
+        self.listbox.bind("<ButtonRelease-1>", self._drag_release)
+
+        # â”€â”€ Action buttons â”€â”€
+        f4 = tk.Frame(self.window, bg="#f3f3f3", pady=6)
+        f4.pack(fill=tk.X, padx=12)
+        tk.Button(f4, text="âœ“  Mark Complete", command=self.complete_task,
+                  font=("Segoe UI", 10), bg="#107c10", fg="white",
+                  relief=tk.FLAT, padx=10, pady=4).pack(side=tk.LEFT, padx=(0, 6))
+        tk.Button(f4, text="ðŸ—‘  Delete", command=self.delete_task,
+                  font=("Segoe UI", 10), bg="#d13438", fg="white",
+                  relief=tk.FLAT, padx=10, pady=4).pack(side=tk.LEFT)
+        tk.Button(f4, text="âœ•  Close  [Esc]", command=self.hide_window,
+                  font=("Segoe UI", 10), bg="#555555", fg="white",
+                  relief=tk.FLAT, padx=10, pady=4).pack(side=tk.RIGHT)
+
+        # â”€â”€ Status bar â”€â”€
+        self.status_var = tk.StringVar(value="Ready")
+        tk.Label(self.window, textvariable=self.status_var,
+                 font=("Segoe UI", 9), bg="#ddd",
+                 anchor=tk.W, padx=8, pady=3).pack(fill=tk.X, side=tk.BOTTOM)
+
+    # â”€â”€ Task operations â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+
+    def refresh_tasks(self):
+        if not self.window or not self.window.winfo_exists():
+            return
+        date_filter = self.date_var.get().strip()
+        self.listbox.delete(0, tk.END)
+        self.displayed_tasks = []
+        filtered = [t for t in self.tasks
+                    if not date_filter or t["date"] == date_filter]
+        # Pending first, completed at the bottom
+        sorted_tasks = [t for t in filtered if not t["done"]] + \
+                       [t for t in filtered if t["done"]]
+        for task in sorted_tasks:
+            self.displayed_tasks.append(task)
+            status = "âœ“" if task["done"] else "â—‹"
+            reminder = task.get("reminder", "")
+            rem_date = task.get("reminder_date", task["date"])
+            if reminder and not task["done"]:
+                rem_str = f" â°{rem_date} {reminder}" if rem_date != task["date"] else f" â°{reminder}"
+            else:
+                rem_str = ""
+            self.listbox.insert(tk.END, f"  {status}  [{task['date']}]{rem_str}  {task['text']}")
+            if task["done"]:
+                self.listbox.itemconfig(tk.END, fg="#aaaaaa", bg="#f8f8f8")
+            else:
+                c = COLORS.get(task.get("color", "default"), COLORS["default"])
+                self.listbox.itemconfig(tk.END, fg=c["fg"], bg=c["bg"])
+        pending = sum(1 for t in self.tasks if not t["done"])
+        self.status_var.set(
+            f"{len(self.tasks)} tasks total  |  {pending} pending  |  "
+            f"Hotkey: Ctrl+Alt+T  |  Close: Esc"
+        )
+
+    def add_task(self):
+        text = self.task_var.get().strip()
+        if not text:
+            return
+        date = self.date_var.get().strip() or datetime.now().strftime("%Y-%m-%d")
+        reminder = self.reminder_var.get().strip()
+        if reminder in ("HH:MM", ""):
+            reminder = ""
+        else:
+            # Validate HH:MM format
+            try:
+                datetime.strptime(reminder, "%H:%M")
+            except ValueError:
+                reminder = ""
+        self.tasks.append({
+            "text": text,
+            "date": date,
+            "done": False,
+            "color": "default",
+            "reminder": reminder,
+            "reminder_date": date if reminder else "",
+            "reminded": False,
+            "created": datetime.now().isoformat()
+        })
+        save_tasks(self.tasks)
+        self.task_var.set("")
+        self.reminder_var.set("")
+        self.refresh_tasks()
+
+    def _on_double_click(self, event):
+        sel = self.listbox.curselection()
+        if not sel:
+            return
+        task = self.displayed_tasks[sel[0]]
+        task["done"] = not task["done"]
+        save_tasks(self.tasks)
+        self.refresh_tasks()
+
+    def _on_right_click(self, event):
+        index = self.listbox.nearest(event.y)
+        if index < 0 or index >= len(self.displayed_tasks):
+            return
+        self.listbox.selection_clear(0, tk.END)
+        self.listbox.selection_set(index)
+        task = self.displayed_tasks[index]
+        menu = tk.Menu(self.window, tearoff=0)
+        toggle_label = "Mark Incomplete" if task["done"] else "Mark Complete"
+        menu.add_command(label=toggle_label, command=self._on_double_click)
+        menu.add_command(label="âœ  Edit Task", command=lambda: self._edit_task(index))
+        menu.add_separator()
+        color_menu = tk.Menu(menu, tearoff=0)
+        for clabel, ckey in [
+            ("â¬œ  Default", "default"),
+            ("ðŸ”´  Red  (High Priority)", "red"),
+            ("ðŸŸ   Orange  (Medium Priority)", "orange"),
+            ("ðŸŸ¡  Yellow", "yellow"),
+            ("ðŸŸ¢  Green  (Low Priority)", "green"),
+            ("ðŸ”µ  Blue  (Info)", "blue"),
+            ("ðŸŸ£  Purple", "purple"),
+        ]:
+            color_menu.add_command(
+                label=clabel,
+                command=lambda k=ckey, i=index: self._set_color(i, k)
+            )
+        menu.add_cascade(label="ðŸŽ¨  Set Color", menu=color_menu)
+        menu.add_command(label="â°  Set Reminder",
+                         command=lambda: self._set_reminder_dialog(index))
+        menu.add_separator()
+        menu.add_command(label="ðŸ—‘  Delete", command=self.delete_task)
+        menu.tk_popup(event.x_root, event.y_root)
+
+    def _edit_task(self, index):
+        task = self.displayed_tasks[index]
+        edit_win = tk.Toplevel(self.window)
+        edit_win.title("Edit Task")
+        edit_win.geometry("420x130")
+        edit_win.resizable(False, False)
+        edit_win.configure(bg="#f3f3f3")
+        edit_win.attributes("-topmost", True)
+        edit_win.grab_set()
+        # Center
+        edit_win.update_idletasks()
+        x = self.window.winfo_x() + (self.window.winfo_width() // 2) - 210
+        y = self.window.winfo_y() + (self.window.winfo_height() // 2) - 65
+        edit_win.geometry(f"420x130+{x}+{y}")
+        tk.Label(edit_win, text="Edit task text:", font=("Segoe UI", 10),
+                 bg="#f3f3f3").pack(anchor=tk.W, padx=12, pady=(12, 4))
+        var = tk.StringVar(value=task["text"])
+        entry = tk.Entry(edit_win, textvariable=var, font=("Segoe UI", 10),
+                         relief=tk.FLAT, highlightthickness=1,
+                         highlightbackground="#ccc")
+        entry.pack(fill=tk.X, padx=12, ipady=4)
+        entry.select_range(0, tk.END)
+        entry.focus_set()
+        def save_edit(event=None):
+            new_text = var.get().strip()
+            if new_text:
+                task["text"] = new_text
+                save_tasks(self.tasks)
+                self.refresh_tasks()
+            edit_win.destroy()
+        entry.bind("<Return>", save_edit)
+        edit_win.bind("<Escape>", lambda e: edit_win.destroy())
+        bf = tk.Frame(edit_win, bg="#f3f3f3")
+        bf.pack(fill=tk.X, padx=12, pady=8)
+        tk.Button(bf, text="Save", command=save_edit, font=("Segoe UI", 10),
+                  bg="#0078d4", fg="white", relief=tk.FLAT,
+                  padx=10, pady=3).pack(side=tk.LEFT, padx=(0, 6))
+        tk.Button(bf, text="Cancel", command=edit_win.destroy,
+                  font=("Segoe UI", 10), bg="#555555", fg="white",
+                  relief=tk.FLAT, padx=10, pady=3).pack(side=tk.LEFT)
+
+    def _set_reminder_dialog(self, index):
+        from datetime import timedelta
+        task = self.displayed_tasks[index]
+
+        dlg = tk.Toplevel(self.window)
+        dlg.title("â°  Set Reminder")
+        dlg.geometry("430x350")
+        dlg.resizable(False, False)
+        dlg.configure(bg="#f3f3f3")
+        dlg.attributes("-topmost", True)
+        dlg.grab_set()
+        dlg.update_idletasks()
+        x = (dlg.winfo_screenwidth() // 2) - 215
+        y = (dlg.winfo_screenheight() // 2) - 175
+        dlg.geometry(f"430x350+{x}+{y}")
+
+        # â”€â”€ Working vars â”€â”€
+        rd_var  = tk.StringVar(value=task.get("reminder_date") or task.get("date", ""))
+        rt_var  = tk.StringVar(value=task.get("reminder", ""))
+
+        def apply_delta(delta_minutes=None, delta_days=None, hour=9):
+            """Fill date/time fields from a relative offset and close."""
+            now = datetime.now()
+            if delta_minutes is not None:
+                target = now + timedelta(minutes=delta_minutes)
+                rd_var.set(target.strftime("%Y-%m-%d"))
+                rt_var.set(target.strftime("%H:%M"))
+            elif delta_days is not None:
+                target = now + timedelta(days=delta_days)
+                rd_var.set(target.strftime("%Y-%m-%d"))
+                rt_var.set(f"{hour:02d}:00")
+
+        def save_and_close():
+            date_val = rd_var.get().strip()
+            time_val = rt_var.get().strip()
+            if time_val:
+                try:
+                    datetime.strptime(time_val, "%H:%M")
+                except ValueError:
+                    time_val = ""
+            if date_val:
+                try:
+                    datetime.strptime(date_val, "%Y-%m-%d")
+                except ValueError:
+                    date_val = ""
+            task["reminder"]      = time_val
+            task["reminder_date"] = date_val if time_val else ""
+            task["reminded"]      = False
+            save_tasks(self.tasks)
+            self.refresh_tasks()
+            dlg.destroy()
+
+        def clear_and_close():
+            task["reminder"]      = ""
+            task["reminder_date"] = ""
+            task["reminded"]      = False
+            save_tasks(self.tasks)
+            self.refresh_tasks()
+            dlg.destroy()
+
+        # â”€â”€ Quick presets â”€â”€
+        BG = "#f3f3f3"
+        tk.Label(dlg, text="Quick reminders", font=("Segoe UI", 9, "bold"),
+                 bg=BG, fg="#555").pack(anchor="w", padx=16, pady=(12, 2))
+
+        row1 = tk.Frame(dlg, bg=BG); row1.pack(fill=tk.X, padx=14, pady=2)
+        for label, mins in [("15 min", 15), ("30 min", 30),
+                             ("1 hour", 60), ("2 hours", 120), ("4 hours", 240)]:
+            tk.Button(row1, text=label,
+                      command=lambda m=mins: [apply_delta(delta_minutes=m), save_and_close()],
+                      font=("Segoe UI", 9), bg="#e1efff", fg="#0050a0",
+                      relief=tk.FLAT, padx=7, pady=3).pack(side=tk.LEFT, padx=3)
+
+        row2 = tk.Frame(dlg, bg=BG); row2.pack(fill=tk.X, padx=14, pady=2)
+        for label, days in [("Tomorrow", 1), ("In 2 days", 2),
+                             ("In 3 days", 3), ("Next week", 7), ("In 2 weeks", 14)]:
+            tk.Button(row2, text=label,
+                      command=lambda d=days: [apply_delta(delta_days=d, hour=9), save_and_close()],
+                      font=("Segoe UI", 9), bg="#e8f5e9", fg="#1b5e20",
+                      relief=tk.FLAT, padx=7, pady=3).pack(side=tk.LEFT, padx=3)
+
+        # â”€â”€ Custom offset â”€â”€
+        tk.Frame(dlg, bg="#ccc", height=1).pack(fill=tk.X, padx=14, pady=8)
+        tk.Label(dlg, text="Custom offset", font=("Segoe UI", 9, "bold"),
+                 bg=BG, fg="#555").pack(anchor="w", padx=16)
+        crow = tk.Frame(dlg, bg=BG); crow.pack(fill=tk.X, padx=14, pady=4)
+        tk.Label(crow, text="In", font=("Segoe UI", 10), bg=BG).pack(side=tk.LEFT)
+        amt_var = tk.StringVar(value="1")
+        tk.Spinbox(crow, from_=1, to=999, textvariable=amt_var, width=4,
+                   font=("Segoe UI", 10)).pack(side=tk.LEFT, padx=5)
+        unit_var = tk.StringVar(value="hours")
+        unit_menu = tk.OptionMenu(crow, unit_var, "hours", "days", "weeks")
+        unit_menu.config(font=("Segoe UI", 10), bg="white", relief=tk.FLAT)
+        unit_menu.pack(side=tk.LEFT)
+
+        def apply_custom():
+            try:
+                amt = int(amt_var.get())
+            except ValueError:
+                return
+            unit = unit_var.get()
+            if unit == "hours":
+                apply_delta(delta_minutes=amt * 60)
+            elif unit == "days":
+                apply_delta(delta_days=amt, hour=9)
+            elif unit == "weeks":
+                apply_delta(delta_days=amt * 7, hour=9)
+            save_and_close()
+
+        tk.Button(crow, text="Set â†’", command=apply_custom,
+                  font=("Segoe UI", 9, "bold"), bg="#0078d4", fg="white",
+                  relief=tk.FLAT, padx=8, pady=2).pack(side=tk.LEFT, padx=8)
+
+        # â”€â”€ Exact date & time â”€â”€
+        tk.Frame(dlg, bg="#ccc", height=1).pack(fill=tk.X, padx=14, pady=8)
+        tk.Label(dlg, text="Exact date & time", font=("Segoe UI", 9, "bold"),
+                 bg=BG, fg="#555").pack(anchor="w", padx=16)
+        erow = tk.Frame(dlg, bg=BG); erow.pack(fill=tk.X, padx=14, pady=4)
+        tk.Label(erow, text="Date:", font=("Segoe UI", 10), bg=BG).pack(side=tk.LEFT)
+        tk.Entry(erow, textvariable=rd_var, width=12, font=("Segoe UI", 10),
+                 relief=tk.FLAT, highlightthickness=1,
+                 highlightbackground="#ccc").pack(side=tk.LEFT, padx=5, ipady=3)
+        tk.Label(erow, text="Time:", font=("Segoe UI", 10), bg=BG).pack(side=tk.LEFT)
+        tk.Entry(erow, textvariable=rt_var, width=7, font=("Segoe UI", 10),
+                 relief=tk.FLAT, highlightthickness=1,
+                 highlightbackground="#ccc").pack(side=tk.LEFT, padx=5, ipady=3)
+
+        # â”€â”€ Buttons â”€â”€
+        brow = tk.Frame(dlg, bg=BG); brow.pack(fill=tk.X, padx=14, pady=(10, 8))
+        tk.Button(brow, text="âœ“  Set Reminder", command=save_and_close,
+                  font=("Segoe UI", 10, "bold"), bg="#0078d4", fg="white",
+                  relief=tk.FLAT, padx=10, pady=4).pack(side=tk.LEFT, padx=(0, 6))
+        tk.Button(brow, text="âœ•  Clear", command=clear_and_close,
+                  font=("Segoe UI", 10), bg="#d13438", fg="white",
+                  relief=tk.FLAT, padx=10, pady=4).pack(side=tk.LEFT, padx=(0, 6))
+        tk.Button(brow, text="Cancel", command=dlg.destroy,
+                  font=("Segoe UI", 10), bg="#555", fg="white",
+                  relief=tk.FLAT, padx=10, pady=4).pack(side=tk.LEFT)
+        dlg.bind("<Escape>", lambda e: dlg.destroy())
+
+    def _show_reminder_popup(self, task):
+        popup = tk.Toplevel()
+        popup.title("â° Reminder")
+        popup.geometry("380x160")
+        popup.resizable(False, False)
+        popup.configure(bg="#fff3e0")
+        popup.attributes("-topmost", True)
+        popup.lift()
+        popup.focus_force()
+        # Center
+        popup.update_idletasks()
+        x = (popup.winfo_screenwidth() // 2) - 190
+        y = (popup.winfo_screenheight() // 2) - 80
+        popup.geometry(f"380x160+{x}+{y}")
+        tk.Label(popup, text="â°  Reminder!", font=("Segoe UI", 13, "bold"),
+                 bg="#fff3e0", fg="#e65100").pack(pady=(18, 4))
+        tk.Label(popup, text=task["text"], font=("Segoe UI", 11),
+                 bg="#fff3e0", fg="#333", wraplength=340).pack(pady=4)
+        rem_date = task.get("reminder_date") or task["date"]
+        tk.Label(popup, text=f"Scheduled: {rem_date}  {task.get('reminder', '')}",
+                 font=("Segoe UI", 9), bg="#fff3e0", fg="#888").pack()
+        bf = tk.Frame(popup, bg="#fff3e0")
+        bf.pack(pady=10)
+        tk.Button(bf, text="âœ“  Done",
+                  command=lambda: [self._mark_reminded_done(task), popup.destroy()],
+                  font=("Segoe UI", 10), bg="#107c10", fg="white",
+                  relief=tk.FLAT, padx=10, pady=4).pack(side=tk.LEFT, padx=6)
+        tk.Button(bf, text="Dismiss",
+                  command=lambda: [self._mark_reminded(task), popup.destroy()],
+                  font=("Segoe UI", 10), bg="#555", fg="white",
+                  relief=tk.FLAT, padx=10, pady=4).pack(side=tk.LEFT)
+
+    def _mark_reminded(self, task):
+        task["reminded"] = True
+        save_tasks(self.tasks)
+
+    def _mark_reminded_done(self, task):
+        task["reminded"] = True
+        task["done"] = True
+        save_tasks(self.tasks)
+        self.refresh_tasks()
+
+    def _reminder_checker(self):
+        """Background thread â€” checks every 30 seconds for due reminders."""
+        while True:
+            threading.Event().wait(30)
+            now = datetime.now()
+            today = now.strftime("%Y-%m-%d")
+            now_hhmm = now.strftime("%H:%M")
+            for task in self.tasks:
+                rem_date = task.get("reminder_date") or task.get("date", "")
+                if (task.get("reminder") and
+                        not task.get("done") and
+                        not task.get("reminded") and
+                        rem_date == today and
+                        task["reminder"] <= now_hhmm):
+                    if self.window and self.window.winfo_exists():
+                        self.window.after(0, lambda t=task: self._show_reminder_popup(t))
+
+    def _set_color(self, index, color_key):
+        self.displayed_tasks[index]["color"] = color_key
+        save_tasks(self.tasks)
+        self.refresh_tasks()
+
+    def _drag_start(self, event):
+        self._drag_start_index = self.listbox.nearest(event.y)
+        self._drag_start_y = event.y
+
+    def _drag_motion(self, event):
+        if self._drag_start_index is None:
+            return
+        current = self.listbox.nearest(event.y)
+        if current != self._drag_start_index:
+            self.listbox.selection_clear(0, tk.END)
+            self.listbox.selection_set(current)
+            self.listbox.itemconfig(current, bg="#cce4ff")
+
+    def _drag_release(self, event):
+        if self._drag_start_index is None:
+            return
+        end_index = self.listbox.nearest(event.y)
+        if abs(event.y - self._drag_start_y) > 8 and end_index != self._drag_start_index:
+            task = self.displayed_tasks[self._drag_start_index]
+            target_task = self.displayed_tasks[end_index]
+            src_idx = self.tasks.index(task)
+            tgt_idx = self.tasks.index(target_task)
+            self.tasks.insert(tgt_idx, self.tasks.pop(src_idx))
+            save_tasks(self.tasks)
+            self.refresh_tasks()
+            self.listbox.selection_set(end_index)
+        self._drag_start_index = None
+        self._drag_start_y = None
+
+    def complete_task(self):
+        sel = self.listbox.curselection()
+        if not sel:
+            return
+        self.displayed_tasks[sel[0]]["done"] = True
+        save_tasks(self.tasks)
+        self.refresh_tasks()
+
+    def delete_task(self):
+        sel = self.listbox.curselection()
+        if not sel:
+            return
+        self.tasks.remove(self.displayed_tasks[sel[0]])
+        save_tasks(self.tasks)
+        self.refresh_tasks()
+
+    def set_today(self):
+        self.date_var.set(datetime.now().strftime("%Y-%m-%d"))
+        self.refresh_tasks()
+
+    def show_all(self):
+        self.date_var.set("")
+        self.refresh_tasks()
+
+    # â”€â”€ Window visibility â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+
+    def hide_window(self):
+        if self.window and self.window.winfo_exists():
+            self.window.withdraw()
+
+    def show_window(self):
+        if self.window and self.window.winfo_exists():
+            self.window.deiconify()
+            self.window.lift()
+            self.window.focus_force()
+            self.refresh_tasks()
+
+    def toggle_window(self):
+        """Called from hotkey â€” must schedule on main thread via after()."""
+        if self.window and self.window.winfo_exists():
+            if self.window.state() == "withdrawn":
+                self.window.after(0, self.show_window)
+            else:
+                self.window.after(0, self.hide_window)
+
+    # â”€â”€ Tray â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+
+    def _run_tray(self):
+        menu = pystray.Menu(
+            pystray.MenuItem("Open / Hide  (Ctrl+Alt+T)",
+                             lambda: self.window.after(0, self.toggle_window)),
+            pystray.Menu.SEPARATOR,
+            pystray.MenuItem("Quit", self.quit_app)
+        )
+        self.tray_icon = pystray.Icon(
+            "todo_tracker", create_icon_image(), "Todo Tracker", menu
+        )
+        self.tray_icon.run()
+
+    def quit_app(self, *_):
+        if self.tray_icon:
+            self.tray_icon.stop()
+        if self.window:
+            self.window.destroy()
+        os._exit(0)
+
+    # â”€â”€ Entry point â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+
+    def run(self):
+        self.create_window()
+        threading.Thread(target=self._run_tray, daemon=True).start()
+        threading.Thread(target=self._reminder_checker, daemon=True).start()
+        keyboard.add_hotkey("ctrl+alt+t", self.toggle_window)
+        self.window.mainloop()
+
+
+if __name__ == "__main__":
+    app = TodoApp()
+    app.run()
