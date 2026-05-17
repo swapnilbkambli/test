@@ -149,6 +149,42 @@ def _fmt_countdown(secs: float) -> str:
     return "%02d:%02d" % (m, s)
 
 
+# ─── Persistent config ─────────────────────────────────────────────────────────
+#
+#  Stored at  ~/.ske_manager.json
+#  Schema:
+#  {
+#    "environments": {
+#      "prod": {
+#        "ske_url": "...", "auth_url": "...", "username": "...",
+#        "password": "",          ← only set when save_password=true
+#        "skectl_path": "...",
+#        "pinned_namespaces": ["monitoring", "my-team"]
+#      }
+#    },
+#    "last_environment": "prod"
+#  }
+
+def _config_path() -> str:
+    return os.path.join(os.path.expanduser("~"), ".ske_manager.json")
+
+
+def _load_config() -> dict:
+    try:
+        with open(_config_path(), "r", encoding="utf-8") as f:
+            return json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return {"environments": {}, "last_environment": ""}
+
+
+def _save_config(cfg: dict):
+    try:
+        with open(_config_path(), "w", encoding="utf-8") as f:
+            json.dump(cfg, f, indent=2)
+    except Exception as exc:
+        pass  # non-fatal
+
+
 # ─── Application ───────────────────────────────────────────────────────────────
 
 class App:
@@ -187,6 +223,12 @@ class App:
         self._session_stop    = threading.Event()
         self._renewing        = False     # guard against parallel renewals
         self._creds           = None      # (ske_url, auth_url, user, pw, skectl)
+
+        # Persistent config
+        self._cfg             = _load_config()
+        self._active_env      = ""        # name of the currently loaded environment
+        self.save_pw_var      = tk.BooleanVar(value=False)
+        self.env_var          = tk.StringVar()
 
         # Internal
         self._q            = queue.Queue()
@@ -249,13 +291,36 @@ class App:
     def _build_login_frame(self):
         self.login_frame = tk.Frame(self.root, bg=BG)
 
-        card = tk.Frame(self.login_frame, bg=SURFACE, padx=36, pady=36)
+        card = tk.Frame(self.login_frame, bg=SURFACE, padx=36, pady=30)
         card.place(relx=0.5, rely=0.5, anchor="center")
 
         tk.Label(card, text="SKE Manager", bg=SURFACE, fg=ACCENT,
                  font=("Consolas", 22, "bold")).grid(
-                     row=0, column=0, columnspan=2, pady=(0, 24))
+                     row=0, column=0, columnspan=3, pady=(0, 18))
 
+        # ── Environment selector row ─────────────────────────────────────────
+        tk.Label(card, text="Environment", bg=SURFACE, fg=ACCENT,
+                 font=("Consolas", 9, "bold"), width=12, anchor="e").grid(
+                     row=1, column=0, padx=(0, 10), pady=6)
+
+        self.env_combo = ttk.Combobox(card, textvariable=self.env_var,
+                                      width=28, state="readonly")
+        self.env_combo.grid(row=1, column=1, pady=6, sticky="ew")
+        self.env_combo.bind("<<ComboboxSelected>>", self._on_env_selected)
+
+        env_btns = tk.Frame(card, bg=SURFACE)
+        env_btns.grid(row=1, column=2, padx=(8, 0))
+        tk.Button(env_btns, text="Save", bg=ACCENT, fg=BG, relief="flat",
+                  font=("Consolas", 9, "bold"), cursor="hand2", padx=6,
+                  command=self._save_env).pack(side="left", padx=(0, 4))
+        tk.Button(env_btns, text="Delete", bg=SURFACE, fg=ERROR, relief="flat",
+                  font=("Consolas", 9), cursor="hand2", padx=6,
+                  command=self._delete_env).pack(side="left")
+
+        ttk.Separator(card, orient="horizontal").grid(
+            row=2, column=0, columnspan=3, sticky="ew", pady=(4, 12))
+
+        # ── Credential fields ────────────────────────────────────────────────
         fields = [
             ("SKE URL",   self.ske_url_var,  False, "https://ske.example.com"),
             ("Auth URL",  self.auth_url_var, False, "https://auth.example.com"),
@@ -263,46 +328,57 @@ class App:
             ("Password",  self.pass_var,     True,  ""),
         ]
         self._login_entries = []
-        for i, (lbl, var, secret, placeholder) in enumerate(fields, 1):
+        for i, (lbl, var, secret, placeholder) in enumerate(fields, 3):
             tk.Label(card, text=lbl, bg=SURFACE, fg=FG,
-                     font=("Consolas", 10), width=10, anchor="e").grid(
-                         row=i, column=0, padx=(0, 10), pady=6)
+                     font=("Consolas", 10), width=12, anchor="e").grid(
+                         row=i, column=0, padx=(0, 10), pady=5)
             e = tk.Entry(card, textvariable=var, show="*" if secret else "",
                          bg=ENTRY_BG, fg=FG, insertbackground=FG,
-                         relief="flat", width=44, font=("Consolas", 10))
-            e.grid(row=i, column=1, pady=6, ipady=4)
+                         relief="flat", width=38, font=("Consolas", 10))
+            e.grid(row=i, column=1, columnspan=2, pady=5, sticky="ew", ipady=4)
             if placeholder:
                 self._add_placeholder(e, placeholder, var)
             self._login_entries.append(e)
             e.bind("<Return>", lambda _: self._do_login())
 
-        # skectl path row
+        # ── skectl path + save-password row ─────────────────────────────────
         tk.Label(card, text="skectl path", bg=SURFACE, fg=DIM,
-                 font=("Consolas", 9), width=10, anchor="e").grid(
-                     row=5, column=0, padx=(0, 10), pady=4)
+                 font=("Consolas", 9), width=12, anchor="e").grid(
+                     row=7, column=0, padx=(0, 10), pady=4)
         path_f = tk.Frame(card, bg=SURFACE)
-        path_f.grid(row=5, column=1, pady=4, sticky="ew")
+        path_f.grid(row=7, column=1, columnspan=2, pady=4, sticky="ew")
         self.skectl_path_var = tk.StringVar(value=SKECTL_CMD)
         tk.Entry(path_f, textvariable=self.skectl_path_var,
                  bg=ENTRY_BG, fg=DIM, insertbackground=FG,
-                 relief="flat", width=36, font=("Consolas", 9)).pack(
+                 relief="flat", width=30, font=("Consolas", 9)).pack(
                      side="left", ipady=3)
         tk.Button(path_f, text="Browse", bg=SURFACE, fg=DIM,
                   relief="flat", font=("Consolas", 9), cursor="hand2",
                   command=self._browse_skectl).pack(side="left", padx=(6, 0))
+        ttk.Checkbutton(path_f, text="Save password",
+                        variable=self.save_pw_var).pack(
+                            side="left", padx=(14, 0))
 
+        # ── Login button ─────────────────────────────────────────────────────
         self.login_btn = tk.Button(
             card, text="  Login  ", bg=ACCENT, fg=BG,
             font=("Consolas", 12, "bold"), relief="flat",
             cursor="hand2", padx=16, pady=6,
             command=self._do_login)
-        self.login_btn.grid(row=6, column=0, columnspan=2, pady=(22, 0))
+        self.login_btn.grid(row=8, column=0, columnspan=3, pady=(20, 0))
 
         self.login_status = tk.Label(card, text="", bg=SURFACE, fg=ERROR,
                                      font=("Consolas", 9))
-        self.login_status.grid(row=7, column=0, columnspan=2, pady=(8, 0))
+        self.login_status.grid(row=9, column=0, columnspan=3, pady=(8, 0))
 
-        self._login_entries[0].focus_set()
+        self._refresh_env_combo()
+        # Pre-load last used environment
+        last = self._cfg.get("last_environment", "")
+        if last and last in self._cfg.get("environments", {}):
+            self.env_var.set(last)
+            self._on_env_selected()
+        else:
+            self._login_entries[0].focus_set()
 
     def _add_placeholder(self, entry, text, var):
         def on_focus_in(_):
@@ -324,6 +400,105 @@ class App:
             filetypes=[("Executable", "*.exe"), ("All files", "*")])
         if path:
             self.skectl_path_var.set(path)
+
+    # ── Environment / config management ───────────────────────────────────────
+
+    def _refresh_env_combo(self):
+        envs = sorted(self._cfg.get("environments", {}).keys())
+        self.env_combo["values"] = envs
+
+    def _on_env_selected(self, _=None):
+        name = self.env_var.get()
+        env  = self._cfg.get("environments", {}).get(name)
+        if not env:
+            return
+        self.ske_url_var.set(env.get("ske_url", ""))
+        self.auth_url_var.set(env.get("auth_url", ""))
+        self.user_var.set(env.get("username", ""))
+        pw = env.get("password", "")
+        self.pass_var.set(pw)
+        self.save_pw_var.set(bool(pw))
+        self.skectl_path_var.set(env.get("skectl_path", SKECTL_CMD))
+        # Fix entry colours (they were set to DIM by placeholder logic)
+        for entry in self._login_entries:
+            entry.config(fg=FG)
+        self._active_env = name
+
+    def _save_env(self):
+        """Save / overwrite an environment profile."""
+        ske  = self.ske_url_var.get().strip()
+        auth = self.auth_url_var.get().strip()
+        user = self.user_var.get().strip()
+        for placeholder in ("https://ske.example.com", "https://auth.example.com"):
+            if ske == placeholder:  ske  = ""
+            if auth == placeholder: auth = ""
+
+        if not all([ske, auth, user]):
+            messagebox.showwarning("Incomplete",
+                                   "Fill in SKE URL, Auth URL and Username before saving.")
+            return
+
+        # Ask for environment name, pre-fill with current
+        default_name = self.env_var.get() or ""
+        name = simpledialog.askstring(
+            "Save environment",
+            "Environment name (e.g. dev, staging, prod):",
+            initialvalue=default_name)
+        if not name:
+            return
+        name = name.strip()
+
+        env_data = {
+            "ske_url":      ske,
+            "auth_url":     auth,
+            "username":     user,
+            "password":     self.pass_var.get() if self.save_pw_var.get() else "",
+            "skectl_path":  self.skectl_path_var.get().strip(),
+            "pinned_namespaces": (
+                self._cfg.get("environments", {})
+                         .get(name, {})
+                         .get("pinned_namespaces", [])
+            ),
+        }
+        if "environments" not in self._cfg:
+            self._cfg["environments"] = {}
+        self._cfg["environments"][name] = env_data
+        self._cfg["last_environment"]   = name
+        _save_config(self._cfg)
+
+        self._active_env = name
+        self.env_var.set(name)
+        self._refresh_env_combo()
+        self.login_status.config(
+            text="Environment '%s' saved." % name, fg=SUCCESS)
+
+    def _delete_env(self):
+        name = self.env_var.get()
+        if not name:
+            return
+        if not messagebox.askyesno("Delete environment",
+                                   "Remove environment '%s'?" % name):
+            return
+        self._cfg.get("environments", {}).pop(name, None)
+        if self._cfg.get("last_environment") == name:
+            self._cfg["last_environment"] = ""
+        _save_config(self._cfg)
+        self.env_var.set("")
+        self._active_env = ""
+        self._refresh_env_combo()
+        self.login_status.config(text="Environment '%s' deleted." % name, fg=WARN)
+
+    def _pinned_namespaces(self) -> list:
+        return (self._cfg.get("environments", {})
+                         .get(self._active_env, {})
+                         .get("pinned_namespaces", []))
+
+    def _save_pinned_namespaces(self, ns_list: list):
+        if not self._active_env:
+            return
+        envs = self._cfg.setdefault("environments", {})
+        envs.setdefault(self._active_env, {})["pinned_namespaces"] = ns_list
+        _save_config(self._cfg)
 
     def _show_login(self):
         self._session_stop.set()        # stop monitor when returning to login
@@ -364,8 +539,11 @@ class App:
         self.login_btn.config(text="  Login  ", state="normal")
         if rc == 0:
             self.login_status.config(text="Login successful!", fg=SUCCESS)
-            # Store credentials for auto-renew
             self._creds = (ske, auth, user, pw, skectl)
+            # Persist last_environment so next launch auto-selects it
+            if self._active_env:
+                self._cfg["last_environment"] = self._active_env
+                _save_config(self._cfg)
             self._load_namespaces()
             self._show_main()
             self._start_session_monitor()
@@ -397,6 +575,13 @@ class App:
         self.ns_combo.pack(side="left", padx=4)
         self.ns_combo.bind("<<ComboboxSelected>>",
                            lambda _: self._refresh_resources())
+
+        tk.Button(top, text="＋", bg=SURFACE, fg=SUCCESS,
+                  relief="flat", font=("Consolas", 10, "bold"), cursor="hand2",
+                  command=self._add_namespace).pack(side="left", padx=(0, 2))
+        tk.Button(top, text="✕", bg=SURFACE, fg=ERROR,
+                  relief="flat", font=("Consolas", 9), cursor="hand2",
+                  command=self._remove_namespace).pack(side="left", padx=(0, 6))
 
         ttk.Checkbutton(top, text="All NS", variable=self.all_ns_var,
                         command=self._on_all_ns_toggle).pack(side="left", padx=6)
@@ -878,10 +1063,56 @@ class App:
         threading.Thread(target=_t, daemon=True).start()
 
     def _on_ns_list(self, ns_list):
-        self.ns_combo["values"] = ns_list
-        if ns_list and self.ns_var.get() not in ns_list:
-            self.ns_var.set(ns_list[0])
+        # Merge cluster namespaces with pinned ones; pinned appear first
+        pinned  = self._pinned_namespaces()
+        merged  = pinned + [n for n in ns_list if n not in pinned]
+        self.ns_combo["values"] = merged
+        cur = self.ns_var.get()
+        if not cur or cur not in merged:
+            self.ns_var.set(merged[0] if merged else "default")
         self._refresh_resources()
+
+    def _add_namespace(self):
+        ns = simpledialog.askstring(
+            "Add namespace",
+            "Namespace name to pin to this environment:")
+        if not ns:
+            return
+        ns = ns.strip()
+        pinned = self._pinned_namespaces()
+        if ns in pinned:
+            messagebox.showinfo("Already pinned",
+                                "'%s' is already in the list." % ns)
+            return
+        pinned.append(ns)
+        self._save_pinned_namespaces(pinned)
+        # Refresh the dropdown immediately
+        current_values = list(self.ns_combo["values"])
+        if ns not in current_values:
+            self.ns_combo["values"] = [ns] + current_values
+        self.ns_var.set(ns)
+        self._refresh_resources()
+
+    def _remove_namespace(self):
+        ns = self.ns_var.get()
+        if not ns:
+            return
+        pinned = self._pinned_namespaces()
+        if ns not in pinned:
+            messagebox.showinfo("Not pinned",
+                                "'%s' is a cluster namespace — only pinned "
+                                "namespaces can be removed from this list." % ns)
+            return
+        if not messagebox.askyesno("Remove pinned namespace",
+                                   "Remove '%s' from pinned list?" % ns):
+            return
+        pinned.remove(ns)
+        self._save_pinned_namespaces(pinned)
+        current_values = [v for v in self.ns_combo["values"] if v != ns]
+        self.ns_combo["values"] = current_values
+        self.ns_var.set(current_values[0] if current_values else "")
+        if self.ns_var.get():
+            self._refresh_resources()
 
     def _on_all_ns_toggle(self):
         self.ns_combo.config(
