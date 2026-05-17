@@ -14,7 +14,7 @@ import subprocess, sys
 PIP_INDEX_URL = ""   # leave empty to use the default public PyPI
 
 # ─── Auto-install dependencies before anything else ────────────────────────────
-_REQUIRED = {"flask": "flask"}   # import_name → pip package name
+_REQUIRED = {"flask": "flask", "webview": "pywebview"}   # import_name → pip package name
 
 def _ensure_deps():
     missing = []
@@ -40,7 +40,8 @@ _ensure_deps()
 
 # ─── Imports (guaranteed present after _ensure_deps) ──────────────────────────
 from flask import Flask, render_template, jsonify, request, Response, stream_with_context
-import threading, queue, json, base64, os, time, webbrowser, shlex
+import threading, queue, json, base64, os, time, shlex
+import webview
 from datetime import datetime, timezone
 
 app = Flask(__name__)
@@ -773,7 +774,23 @@ def unpin_namespace(name, ns):
 # ─── Entry point ───────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
-    url = f"http://localhost:{PORT}"
+    url = f"http://127.0.0.1:{PORT}"
     print(f"\n  GDP SKE Manager Web  →  {url}\n")
-    threading.Timer(1.2, lambda: webbrowser.open(url)).start()
-    app.run(host="127.0.0.1", port=PORT, debug=False, threaded=True)
+
+    # Start Flask in a background daemon thread so pywebview owns the main thread
+    flask_thread = threading.Thread(
+        target=lambda: app.run(host="127.0.0.1", port=PORT, debug=False, threaded=True),
+        daemon=True,
+    )
+    flask_thread.start()
+    time.sleep(0.8)   # give Flask a moment to bind the port
+
+    webview.create_window(
+        "GDP SKE Manager — Standard Chartered",
+        url,
+        width=1400,
+        height=860,
+        min_size=(900, 600),
+        resizable=True,
+    )
+    webview.start()
