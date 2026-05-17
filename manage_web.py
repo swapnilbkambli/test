@@ -3,8 +3,6 @@
 GDP SKE Manager Web — Flask-based browser UI for GDP Kubernetes (SKE) Platform
 Run:    python ske_manager_web.py
 Opens:  http://localhost:5000
-
-Config is shared with ske_manager.py  (~/.ske_manager.json)
 """
 
 import subprocess, sys
@@ -25,10 +23,8 @@ def _ensure_deps():
             __import__(imp)
         except ImportError:
             missing.append(pkg)
-
     if not missing:
         return
-
     print(f"[GDP SKE Manager] Installing missing packages: {', '.join(missing)}")
     cmd = [sys.executable, "-m", "pip", "install", "--quiet"]
     if PIP_INDEX_URL:
@@ -57,9 +53,11 @@ SKECTL_CMD  = os.environ.get("SKECTL_CMD",
 PORT        = int(os.environ.get("SKE_PORT", 5000))
 
 # ─── Global session state (single-user local tool) ─────────────────────────────
-_creds     = None          # (ske_url, auth_url, user, pw, skectl)
-_log_stop  = threading.Event()
-_log_q     = queue.Queue()
+_creds          = None          # (ske_url, auth_url, user, pw, skectl)
+_log_stop       = threading.Event()
+_log_q          = queue.Queue()
+_portforwards   = {}            # id -> {proc, local, remote, target, ns}
+_pf_id_counter  = 0
 
 # ─── Subprocess helpers ────────────────────────────────────────────────────────
 
@@ -83,7 +81,7 @@ def run_cmd(args, timeout=30):
         return "", str(e), 1
 
 
-# ─── JWT / config helpers (shared logic with ske_manager.py) ──────────────────
+# ─── JWT / config helpers ──────────────────────────────────────────────────────
 
 def _jwt_expiry(token: str):
     try:
@@ -185,23 +183,13 @@ def session_status():
     expiry = _kubeconfig_expiry()
     ctx, _, _ = run_cmd([KUBECTL_CMD, "config", "current-context"])
     if expiry is None:
-        # Fall back to health check
         _, _, rc = run_cmd([KUBECTL_CMD, "get", "namespaces",
                             "--request-timeout=5s"], timeout=8)
-        return jsonify(
-            context=ctx.strip(),
-            expiry=None,
-            remaining=None,
-            healthy=(rc == 0)
-        )
+        return jsonify(context=ctx.strip(), expiry=None, remaining=None, healthy=(rc == 0))
     now       = datetime.now(tz=timezone.utc)
     remaining = max(0, (expiry - now).total_seconds())
-    return jsonify(
-        context=ctx.strip(),
-        expiry=expiry.isoformat(),
-        remaining=int(remaining),
-        healthy=(remaining > 0)
-    )
+    return jsonify(context=ctx.strip(), expiry=expiry.isoformat(),
+                   remaining=int(remaining), healthy=(remaining > 0))
 
 
 @app.route("/api/renew", methods=["POST"])
@@ -215,6 +203,27 @@ def renew():
     if rc == 0:
         return jsonify(ok=True)
     return jsonify(ok=False, error=(stderr or stdout).splitlines()[0][:120]), 401
+
+
+# ─── Routes: Contexts ──────────────────────────────────────────────────────────
+
+@app.route("/api/contexts")
+def list_contexts():
+    stdout, _, _ = run_cmd([KUBECTL_CMD, "config", "get-contexts", "-o", "name"])
+    ctx, _, _    = run_cmd([KUBECTL_CMD, "config", "current-context"])
+    contexts = [c.strip() for c in stdout.strip().splitlines() if c.strip()]
+    return jsonify(ok=True, contexts=contexts, current=ctx.strip())
+
+
+@app.route("/api/contexts/switch", methods=["POST"])
+def switch_context():
+    d   = request.json or {}
+    ctx = d.get("context", "").strip()
+    if not ctx:
+        return jsonify(ok=False, error="context required"), 400
+    stdout, stderr, rc = run_cmd([KUBECTL_CMD, "config", "use-context", ctx])
+    out = stdout if rc == 0 else stderr
+    return jsonify(ok=(rc == 0), output=out.strip())
 
 
 # ─── Routes: Namespaces ────────────────────────────────────────────────────────
@@ -250,11 +259,11 @@ def resources():
 
 @app.route("/api/describe")
 def describe():
-    res  = request.args.get("type", "pods")
-    name = request.args.get("name", "")
-    ns   = request.args.get("namespace", "default")
+    res    = request.args.get("type", "pods")
+    name   = request.args.get("name", "")
+    ns     = request.args.get("namespace", "default")
     all_ns = request.args.get("all", "false").lower() == "true"
-    args = [KUBECTL_CMD, "describe", res, name] + _ns_flags(res, ns, all_ns)
+    args   = [KUBECTL_CMD, "describe", res, name] + _ns_flags(res, ns, all_ns)
     stdout, stderr, rc = run_cmd(args, timeout=30)
     out = stdout if rc == 0 else stderr
     return jsonify(ok=(rc == 0), output=out, command=" ".join(args))
@@ -262,11 +271,11 @@ def describe():
 
 @app.route("/api/yaml")
 def get_yaml():
-    res  = request.args.get("type", "pods")
-    name = request.args.get("name", "")
-    ns   = request.args.get("namespace", "default")
+    res    = request.args.get("type", "pods")
+    name   = request.args.get("name", "")
+    ns     = request.args.get("namespace", "default")
     all_ns = request.args.get("all", "false").lower() == "true"
-    args = [KUBECTL_CMD, "get", res, name, "-o", "yaml"] + _ns_flags(res, ns, all_ns)
+    args   = [KUBECTL_CMD, "get", res, name, "-o", "yaml"] + _ns_flags(res, ns, all_ns)
     stdout, stderr, rc = run_cmd(args, timeout=15)
     out = stdout if rc == 0 else stderr
     return jsonify(ok=(rc == 0), output=out, command=" ".join(args))
@@ -332,8 +341,8 @@ def restart():
 
 @app.route("/api/containers")
 def containers():
-    pod  = request.args.get("pod", "")
-    ns   = request.args.get("namespace", "default")
+    pod = request.args.get("pod", "")
+    ns  = request.args.get("namespace", "default")
     stdout, _, rc = run_cmd([
         KUBECTL_CMD, "get", "pod", pod, "-n", ns,
         "-o", "jsonpath={.spec.containers[*].name}"])
@@ -363,16 +372,15 @@ def run_command():
 def stream_logs():
     global _log_stop, _log_q
 
-    pod     = request.args.get("pod", "")
-    ns      = request.args.get("namespace", "default")
-    cnt     = request.args.get("container", "")
-    tail    = request.args.get("tail", "300")
-    prev    = request.args.get("previous", "false") == "true"
+    pod  = request.args.get("pod", "")
+    ns   = request.args.get("namespace", "default")
+    cnt  = request.args.get("container", "")
+    tail = request.args.get("tail", "300")
+    prev = request.args.get("previous", "false") == "true"
 
     if not pod:
         return jsonify(ok=False, error="pod required"), 400
 
-    # Stop any existing stream
     _log_stop.set()
     time.sleep(0.15)
     _log_stop.clear()
@@ -401,12 +409,11 @@ def stream_logs():
         except Exception as e:
             q.put(f"[ERROR] {e}")
         finally:
-            q.put(None)  # sentinel
+            q.put(None)
 
     threading.Thread(target=_reader, daemon=True).start()
 
     def _generate():
-        # Send the command as first event
         yield f"data: {json.dumps({'type': 'cmd', 'text': ' '.join(args)})}\n\n"
         while True:
             try:
@@ -416,7 +423,7 @@ def stream_logs():
                     break
                 yield f"data: {json.dumps({'type': 'line', 'text': line})}\n\n"
             except queue.Empty:
-                yield ": ping\n\n"   # keep connection alive
+                yield ": ping\n\n"
 
     return Response(
         stream_with_context(_generate()),
@@ -430,12 +437,278 @@ def stop_logs():
     return jsonify(ok=True)
 
 
+# ─── Routes: Port Forwarding ───────────────────────────────────────────────────
+
+@app.route("/api/portforward", methods=["GET"])
+def list_portforwards():
+    global _portforwards
+    dead = [pid for pid, pf in _portforwards.items() if pf["proc"].poll() is not None]
+    for pid in dead:
+        del _portforwards[pid]
+    result = [{"id": pid, "local": pf["local"], "remote": pf["remote"],
+               "target": pf["target"], "ns": pf["ns"]}
+              for pid, pf in _portforwards.items()]
+    return jsonify(ok=True, portforwards=result)
+
+
+@app.route("/api/portforward", methods=["POST"])
+def start_portforward():
+    global _pf_id_counter, _portforwards
+    d      = request.json or {}
+    target = d.get("target", "").strip()
+    local  = str(d.get("local", "")).strip()
+    remote = str(d.get("remote", "")).strip()
+    ns     = d.get("namespace", "default")
+    if not all([target, local, remote]):
+        return jsonify(ok=False, error="target, local, and remote required"), 400
+    args = [KUBECTL_CMD, "port-forward", target, f"{local}:{remote}", "-n", ns]
+    try:
+        proc = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                text=True, **_win_flags())
+    except Exception as e:
+        return jsonify(ok=False, error=str(e)), 500
+    time.sleep(0.6)
+    if proc.poll() is not None:
+        err = proc.stderr.read()
+        return jsonify(ok=False, error=err.strip() or "port-forward failed"), 500
+    _pf_id_counter += 1
+    pid = str(_pf_id_counter)
+    _portforwards[pid] = {"proc": proc, "local": local, "remote": remote,
+                          "target": target, "ns": ns}
+    return jsonify(ok=True, id=pid, command=" ".join(args))
+
+
+@app.route("/api/portforward/<pid>", methods=["DELETE"])
+def stop_portforward(pid):
+    global _portforwards
+    pf = _portforwards.pop(pid, None)
+    if pf:
+        try:
+            pf["proc"].terminate()
+        except Exception:
+            pass
+    return jsonify(ok=True)
+
+
+# ─── Routes: Rollout ───────────────────────────────────────────────────────────
+
+@app.route("/api/rollout/history")
+def rollout_history():
+    res  = request.args.get("type", "deployments")
+    name = request.args.get("name", "")
+    ns   = request.args.get("namespace", "default")
+    args = [KUBECTL_CMD, "rollout", "history", f"{res}/{name}", "-n", ns]
+    stdout, stderr, rc = run_cmd(args, timeout=20)
+    out = stdout if rc == 0 else stderr
+    return jsonify(ok=(rc == 0), output=out, command=" ".join(args))
+
+
+@app.route("/api/rollout/undo", methods=["POST"])
+def rollout_undo():
+    d        = request.json or {}
+    res      = d.get("type", "deployments")
+    name     = d.get("name", "")
+    ns       = d.get("namespace", "default")
+    revision = str(d.get("revision", "")).strip()
+    args     = [KUBECTL_CMD, "rollout", "undo", f"{res}/{name}", "-n", ns]
+    if revision:
+        args += [f"--to-revision={revision}"]
+    stdout, stderr, rc = run_cmd(args, timeout=30)
+    out = stdout if rc == 0 else stderr
+    return jsonify(ok=(rc == 0), output=out, command=" ".join(args))
+
+
+# ─── Routes: ConfigMap / Secret editor ────────────────────────────────────────
+
+@app.route("/api/editor")
+def get_editor():
+    res  = request.args.get("type", "configmaps")
+    name = request.args.get("name", "")
+    ns   = request.args.get("namespace", "default")
+    stdout, stderr, rc = run_cmd(
+        [KUBECTL_CMD, "get", res, name, "-n", ns, "-o", "json"], timeout=15)
+    if rc != 0:
+        return jsonify(ok=False, error=stderr), 500
+    try:
+        obj       = json.loads(stdout)
+        data      = obj.get("data", {}) or {}
+        is_secret = (res == "secrets")
+        if is_secret:
+            decoded = {}
+            for k, v in data.items():
+                try:
+                    decoded[k] = base64.b64decode(v + "==").decode("utf-8", errors="replace")
+                except Exception:
+                    decoded[k] = v
+            data = decoded
+        return jsonify(ok=True, data=data, is_secret=is_secret, name=name, namespace=ns, type=res)
+    except Exception as e:
+        return jsonify(ok=False, error=str(e)), 500
+
+
+@app.route("/api/editor", methods=["POST"])
+def save_editor():
+    d        = request.json or {}
+    res      = d.get("type", "configmaps")
+    name     = d.get("name", "")
+    ns       = d.get("namespace", "default")
+    new_data = d.get("data", {})
+
+    stdout, stderr, rc = run_cmd(
+        [KUBECTL_CMD, "get", res, name, "-n", ns, "-o", "json"], timeout=15)
+    if rc != 0:
+        return jsonify(ok=False, error=stderr), 500
+    try:
+        obj = json.loads(stdout)
+        obj.get("metadata", {}).pop("managedFields", None)
+        obj.get("metadata", {}).pop("resourceVersion", None)
+        if res == "secrets":
+            obj["data"] = {k: base64.b64encode(v.encode()).decode()
+                           for k, v in new_data.items()}
+        else:
+            obj["data"] = new_data
+        proc = subprocess.run(
+            [KUBECTL_CMD, "apply", "-f", "-"],
+            input=json.dumps(obj), capture_output=True, text=True,
+            timeout=30, **_win_flags())
+        out = proc.stdout if proc.returncode == 0 else proc.stderr
+        return jsonify(ok=(proc.returncode == 0), output=out)
+    except Exception as e:
+        return jsonify(ok=False, error=str(e)), 500
+
+
+# ─── Routes: Health overview ───────────────────────────────────────────────────
+
+@app.route("/api/health")
+def health_overview():
+    ns     = request.args.get("namespace", "default")
+    all_ns = request.args.get("all", "false").lower() == "true"
+    ns_f   = ["--all-namespaces"] if all_ns else ["-n", ns]
+
+    stdout, stderr, rc = run_cmd(
+        [KUBECTL_CMD, "get", "pods", "-o", "json"] + ns_f, timeout=20)
+    if rc != 0:
+        return jsonify(ok=False, error=stderr), 500
+    try:
+        pods   = json.loads(stdout).get("items", [])
+        counts = {"running": 0, "pending": 0, "failed": 0,
+                  "succeeded": 0, "unknown": 0, "total": len(pods)}
+        alerts = []
+        for pod in pods:
+            phase = pod.get("status", {}).get("phase", "Unknown").lower()
+            pname = pod["metadata"]["name"]
+            pns   = pod["metadata"].get("namespace", ns)
+            if   phase == "running":   counts["running"]   += 1
+            elif phase == "pending":   counts["pending"]   += 1
+            elif phase == "failed":    counts["failed"]    += 1
+            elif phase == "succeeded": counts["succeeded"] += 1
+            else:                      counts["unknown"]   += 1
+            for cs in pod.get("status", {}).get("containerStatuses", []):
+                reason = cs.get("state", {}).get("waiting", {}).get("reason", "")
+                if reason in ("CrashLoopBackOff", "OOMKilled", "Error",
+                               "ImagePullBackOff", "ErrImagePull"):
+                    alerts.append({"name": pname, "namespace": pns, "reason": reason,
+                                   "restarts": cs.get("restartCount", 0),
+                                   "container": cs.get("name", "")})
+        return jsonify(ok=True, counts=counts, alerts=alerts)
+    except Exception as e:
+        return jsonify(ok=False, error=str(e)), 500
+
+
+# ─── Routes: YAML Apply ────────────────────────────────────────────────────────
+
+@app.route("/api/apply", methods=["POST"])
+def apply_yaml():
+    d         = request.json or {}
+    yaml_text = d.get("yaml", "").strip()
+    if not yaml_text:
+        return jsonify(ok=False, error="yaml required"), 400
+    proc = subprocess.run(
+        [KUBECTL_CMD, "apply", "-f", "-"],
+        input=yaml_text, capture_output=True, text=True,
+        timeout=30, **_win_flags())
+    out = proc.stdout if proc.returncode == 0 else proc.stderr
+    return jsonify(ok=(proc.returncode == 0), output=out, command="kubectl apply -f -")
+
+
+# ─── Routes: Topology ─────────────────────────────────────────────────────────
+
+@app.route("/api/topology")
+def topology():
+    ns     = request.args.get("namespace", "default")
+    all_ns = request.args.get("all", "false").lower() == "true"
+    ns_f   = ["--all-namespaces"] if all_ns else ["-n", ns]
+
+    nodes = {}
+
+    dep_out, _, rc = run_cmd(
+        [KUBECTL_CMD, "get", "deployments", "-o", "json"] + ns_f, timeout=20)
+    if rc == 0:
+        for dep in json.loads(dep_out).get("items", []):
+            dname    = dep["metadata"]["name"]
+            dns      = dep["metadata"].get("namespace", ns)
+            selector = dep.get("spec", {}).get("selector", {}).get("matchLabels", {})
+            nodes[f"{dns}/{dname}"] = {
+                "kind": "Deployment", "name": dname, "namespace": dns,
+                "replicas": dep.get("spec", {}).get("replicas", 0),
+                "ready":    dep.get("status", {}).get("readyReplicas", 0),
+                "selector": selector, "pods": []
+            }
+
+    pod_out, _, rc = run_cmd(
+        [KUBECTL_CMD, "get", "pods", "-o", "json"] + ns_f, timeout=20)
+    if rc == 0:
+        for pod in json.loads(pod_out).get("items", []):
+            pname   = pod["metadata"]["name"]
+            pns     = pod["metadata"].get("namespace", ns)
+            labels  = pod["metadata"].get("labels", {})
+            phase   = pod.get("status", {}).get("phase", "Unknown")
+            restarts = sum(cs.get("restartCount", 0)
+                           for cs in pod.get("status", {}).get("containerStatuses", []))
+            matched = False
+            for key, dep in nodes.items():
+                if dep["namespace"] != pns:
+                    continue
+                sel = dep.get("selector", {})
+                if sel and all(labels.get(k) == v for k, v in sel.items()):
+                    dep["pods"].append({"name": pname, "phase": phase, "restarts": restarts})
+                    matched = True
+                    break
+            if not matched:
+                key = f"{pns}/__standalone__"
+                if key not in nodes:
+                    nodes[key] = {"kind": "Standalone", "name": "Standalone Pods",
+                                  "namespace": pns, "pods": []}
+                nodes[key]["pods"].append({"name": pname, "phase": phase, "restarts": restarts})
+
+    return jsonify(ok=True, topology=list(nodes.values()))
+
+
+# ─── Routes: Pod Exec (terminal) ──────────────────────────────────────────────
+
+@app.route("/api/exec", methods=["POST"])
+def pod_exec():
+    d         = request.json or {}
+    pod       = d.get("pod", "").strip()
+    ns        = d.get("namespace", "default")
+    container = d.get("container", "")
+    cmd       = d.get("cmd", "").strip()
+    if not pod or not cmd:
+        return jsonify(ok=False, error="pod and cmd required"), 400
+    args = [KUBECTL_CMD, "exec", pod, "-n", ns]
+    if container:
+        args += ["-c", container]
+    args += ["--", "sh", "-c", cmd]
+    stdout, stderr, rc = run_cmd(args, timeout=30)
+    out = stdout if rc == 0 else (stderr or stdout)
+    return jsonify(ok=(rc == 0), output=out, command=" ".join(args))
+
+
 # ─── Routes: Config ────────────────────────────────────────────────────────────
 
 @app.route("/api/config", methods=["GET"])
 def get_config():
     cfg = _load_cfg()
-    # Return full env data including password (localhost-only tool)
     return jsonify(environments=cfg.get("environments", {}),
                    last_environment=cfg.get("last_environment", ""))
 
@@ -502,6 +775,5 @@ def unpin_namespace(name, ns):
 if __name__ == "__main__":
     url = f"http://localhost:{PORT}"
     print(f"\n  GDP SKE Manager Web  →  {url}\n")
-    # Open browser after a short delay to let Flask start
     threading.Timer(1.2, lambda: webbrowser.open(url)).start()
     app.run(host="127.0.0.1", port=PORT, debug=False, threaded=True)
