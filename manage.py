@@ -489,15 +489,17 @@ class App:
         self.login_status.config(text="Environment '%s' deleted." % name, fg=WARN)
 
     def _pinned_namespaces(self) -> list:
+        # Use the active environment name, or "__default__" when no env is selected
+        key = self._active_env or "__default__"
         return (self._cfg.get("environments", {})
-                         .get(self._active_env, {})
+                         .get(key, {})
                          .get("pinned_namespaces", []))
 
     def _save_pinned_namespaces(self, ns_list: list):
-        if not self._active_env:
-            return
+        # Persists even when no named environment is active
+        key = self._active_env or "__default__"
         envs = self._cfg.setdefault("environments", {})
-        envs.setdefault(self._active_env, {})["pinned_namespaces"] = ns_list
+        envs.setdefault(key, {})["pinned_namespaces"] = ns_list
         _save_config(self._cfg)
 
     def _show_login(self):
@@ -600,7 +602,8 @@ class App:
                   relief="flat", font=("Consolas", 9, "bold"), cursor="hand2",
                   command=self._refresh_resources).pack(side="left", padx=8)
 
-        tk.Button(top, text="⬡  Namespaces", bg=SURFACE, fg=FG,
+        # Reload namespace list from the cluster (useful after new NS is created)
+        tk.Button(top, text="↺ Reload NS", bg=SURFACE, fg=FG,
                   relief="flat", font=("Consolas", 9), cursor="hand2",
                   command=self._load_namespaces).pack(side="left")
 
@@ -609,12 +612,13 @@ class App:
                   relief="flat", font=("Consolas", 9), cursor="hand2",
                   command=self._show_login).pack(side="right", padx=6)
 
-        tk.Button(top, text="⟳ Renew", bg=SURFACE, fg=SUCCESS,
-                  relief="flat", font=("Consolas", 9, "bold"), cursor="hand2",
-                  command=self._manual_renew).pack(side="right", padx=2)
+        # ── Manual Renew button — commented out; auto-renew handles this ─────
+        # tk.Button(top, text="⟳ Renew", bg=SURFACE, fg=SUCCESS,
+        #           relief="flat", font=("Consolas", 9, "bold"), cursor="hand2",
+        #           command=self._manual_renew).pack(side="right", padx=2)
 
-        ttk.Checkbutton(top, text="Auto-renew", variable=self.auto_renew_var
-                        ).pack(side="right", padx=(0, 8))
+        # ttk.Checkbutton(top, text="Auto-renew", variable=self.auto_renew_var
+        #                 ).pack(side="right", padx=(0, 8))
 
         # Session countdown label — colour updated live
         self.session_lbl = tk.Label(top, textvariable=self.session_lbl_var,
@@ -1008,9 +1012,7 @@ class App:
                     secs = msg[1]
                     self._show_toast(
                         "⚠  Session expiring soon",
-                        "Expires in %s.  Auto-renew: %s" % (
-                            _fmt_countdown(secs),
-                            "ON" if self.auto_renew_var.get() else "OFF — click Renew"),
+                        "Expires in %s.  Will auto-renew shortly." % _fmt_countdown(secs),
                         colour=WARN, duration_ms=10000)
 
                 elif kind == "session_expired":
