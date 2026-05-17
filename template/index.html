@@ -1,0 +1,1147 @@
+<!DOCTYPE html>
+<html lang="en" class="dark h-full">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>GDP SKE Manager</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script>
+  tailwind.config = {
+    darkMode: 'class',
+    theme: {
+      extend: {
+        fontFamily: { mono: ['Consolas', 'Monaco', 'monospace'] },
+        colors: {
+          brand: { DEFAULT: '#3b82f6', dark: '#1d4ed8' }
+        }
+      }
+    }
+  }
+</script>
+<style>
+  * { box-sizing: border-box; }
+  body { font-family: 'Inter', 'Segoe UI', system-ui, sans-serif; }
+  .mono { font-family: Consolas, Monaco, 'Courier New', monospace; }
+
+  /* Scrollbar */
+  ::-webkit-scrollbar { width: 6px; height: 6px; }
+  ::-webkit-scrollbar-track { background: #0f172a; }
+  ::-webkit-scrollbar-thumb { background: #334155; border-radius: 3px; }
+  ::-webkit-scrollbar-thumb:hover { background: #475569; }
+
+  /* Terminal output */
+  .terminal {
+    background: #0d1117;
+    color: #c9d1d9;
+    font-family: Consolas, Monaco, monospace;
+    font-size: 12.5px;
+    line-height: 1.6;
+    white-space: pre-wrap;
+    word-break: break-all;
+    overflow-y: auto;
+    padding: 12px 14px;
+  }
+  .terminal .t-cmd    { color: #58a6ff; }
+  .terminal .t-ok     { color: #3fb950; }
+  .terminal .t-err    { color: #f85149; }
+  .terminal .t-warn   { color: #d29922; }
+  .terminal .t-info   { color: #79c0ff; }
+  .terminal .t-dim    { color: #8b949e; }
+
+  /* Log line colouring */
+  .log-error { color: #f85149; }
+  .log-warn  { color: #d29922; }
+  .log-info  { color: #58a6ff; }
+
+  /* Table */
+  .res-table th {
+    background: #1e293b;
+    color: #94a3b8;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: .05em;
+    text-transform: uppercase;
+    cursor: pointer;
+    user-select: none;
+    padding: 8px 12px;
+    white-space: nowrap;
+    border-bottom: 1px solid #1e293b;
+  }
+  .res-table th:hover { color: #e2e8f0; background: #263145; }
+  .res-table th.sorted-asc::after  { content: ' ▲'; font-size:9px; }
+  .res-table th.sorted-desc::after { content: ' ▼'; font-size:9px; }
+  .res-table td {
+    padding: 7px 12px;
+    font-size: 13px;
+    border-bottom: 1px solid #1e293b;
+    white-space: nowrap;
+    font-family: Consolas, monospace;
+  }
+  .res-table tr.selected td { background: #1e3a5f !important; }
+  .res-table tr:hover td   { background: #1a2744; }
+
+  /* Status badges */
+  .badge { display:inline-block; padding:1px 7px; border-radius:999px;
+           font-size:11px; font-weight:600; font-family:Consolas,monospace; }
+  .badge-green  { background:#14532d; color:#4ade80; }
+  .badge-red    { background:#450a0a; color:#f87171; }
+  .badge-yellow { background:#451a03; color:#fbbf24; }
+  .badge-blue   { background:#172554; color:#93c5fd; }
+  .badge-gray   { background:#1e293b; color:#94a3b8; }
+
+  /* Resize handle between table and output panel */
+  #resize-handle {
+    height: 5px; cursor: ns-resize;
+    background: #1e293b;
+    flex-shrink: 0;
+  }
+  #resize-handle:hover { background: #3b82f6; }
+
+  /* Toast */
+  #toast-container {
+    position: fixed; bottom: 20px; right: 20px;
+    z-index: 9999; display: flex; flex-direction: column; gap: 8px;
+  }
+  .toast {
+    min-width: 280px; max-width: 380px;
+    padding: 12px 16px; border-radius: 8px;
+    font-size: 13px; box-shadow: 0 4px 24px rgba(0,0,0,.5);
+    animation: slide-in .2s ease-out;
+    display: flex; align-items: flex-start; gap: 10px;
+  }
+  @keyframes slide-in { from { transform: translateX(110%); opacity:0; } to { transform:translateX(0); opacity:1; } }
+
+  /* Context menu */
+  #ctx-menu {
+    position: fixed; z-index: 9000; min-width: 180px;
+    background: #1e293b; border: 1px solid #334155;
+    border-radius: 6px; padding: 4px 0;
+    box-shadow: 0 8px 32px rgba(0,0,0,.6);
+    font-size: 13px;
+  }
+  .ctx-item {
+    padding: 7px 16px; cursor: pointer; color: #e2e8f0;
+  }
+  .ctx-item:hover { background: #3b82f6; color: #fff; }
+  .ctx-sep { height: 1px; background: #334155; margin: 4px 0; }
+
+  /* Tabs */
+  .tab-btn { padding: 6px 16px; font-size:12px; font-weight:600;
+             color:#94a3b8; border-bottom: 2px solid transparent;
+             cursor:pointer; white-space:nowrap; transition:color .15s; }
+  .tab-btn:hover { color:#e2e8f0; }
+  .tab-btn.active { color:#3b82f6; border-bottom-color:#3b82f6; }
+
+  /* Action toolbar buttons */
+  .act-btn {
+    display:inline-flex; align-items:center; gap:5px;
+    padding:5px 11px; border-radius:5px; font-size:12px; font-weight:600;
+    cursor:pointer; transition:background .15s; border:none; outline:none;
+    background:#1e293b; color:#cbd5e1;
+  }
+  .act-btn:hover { background:#334155; color:#f1f5f9; }
+  .act-btn:disabled { opacity:.35; cursor:not-allowed; }
+  .act-btn.danger { background:#450a0a; color:#fca5a5; }
+  .act-btn.danger:hover { background:#7f1d1d; }
+  .act-btn.primary { background:#1e3a5f; color:#93c5fd; }
+  .act-btn.primary:hover { background:#1d4ed8; color:#fff; }
+
+  /* Session indicator */
+  .session-ok     { color: #4ade80; }
+  .session-warn   { color: #fbbf24; }
+  .session-danger { color: #f87171; }
+  .session-dim    { color: #64748b; }
+
+  /* Login card */
+  .login-input {
+    width:100%; background:#0f172a; border:1px solid #334155;
+    border-radius:6px; padding:9px 12px; color:#e2e8f0; font-size:14px;
+    outline:none; transition:border-color .15s;
+  }
+  .login-input:focus { border-color:#3b82f6; }
+  .login-label { display:block; font-size:12px; color:#94a3b8; margin-bottom:5px; font-weight:500; }
+</style>
+</head>
+
+<body class="bg-slate-950 text-slate-200 h-full flex flex-col overflow-hidden">
+
+<!-- ═══════════════════ LOGIN OVERLAY ════════════════════════════════════════ -->
+<div id="login-overlay"
+     class="fixed inset-0 z-50 flex items-center justify-center bg-slate-950 bg-opacity-95">
+  <div class="w-full max-w-md bg-slate-900 border border-slate-700 rounded-xl shadow-2xl p-8">
+    <h1 class="text-2xl font-bold text-blue-400 mb-1 text-center">GDP SKE Manager</h1>
+    <p class="text-slate-500 text-xs text-center mb-6">GDP K8S Platform</p>
+
+    <!-- Environment selector -->
+    <div class="mb-5">
+      <label class="login-label">Saved Environment</label>
+      <div class="flex gap-2">
+        <select id="env-select"
+                class="flex-1 bg-slate-950 border border-slate-700 rounded-md px-3 py-2 text-sm text-slate-200 focus:border-blue-500 outline-none"
+                onchange="loadEnv()">
+          <option value="">— select or fill in below —</option>
+        </select>
+        <button onclick="deleteEnv()"
+                class="px-3 py-1 text-xs bg-slate-800 text-red-400 rounded-md hover:bg-red-950 transition">
+          Delete
+        </button>
+      </div>
+    </div>
+
+    <div class="h-px bg-slate-700 mb-5"></div>
+
+    <!-- Credential fields -->
+    <div class="space-y-3 mb-4">
+      <div>
+        <label class="login-label">SKE URL</label>
+        <input id="f-ske"  class="login-input" type="url"  placeholder="https://ske.your-company.com" />
+      </div>
+      <div>
+        <label class="login-label">Auth URL</label>
+        <input id="f-auth" class="login-input" type="url"  placeholder="https://auth.your-company.com" />
+      </div>
+      <div class="flex gap-3">
+        <div class="flex-1">
+          <label class="login-label">Username</label>
+          <input id="f-user" class="login-input" type="text" autocomplete="username" />
+        </div>
+        <div class="flex-1">
+          <label class="login-label">Password</label>
+          <input id="f-pass" class="login-input" type="password" autocomplete="current-password"
+                 onkeydown="if(event.key==='Enter')doLogin()" />
+        </div>
+      </div>
+      <div>
+        <label class="login-label">skectl path</label>
+        <input id="f-skectl" class="login-input" type="text" placeholder="skectl.exe" />
+      </div>
+    </div>
+
+    <!-- Save options -->
+    <div class="flex items-center gap-4 mb-5 text-sm text-slate-400">
+      <label class="flex items-center gap-2 cursor-pointer">
+        <input id="chk-save" type="checkbox" class="accent-blue-500" />
+        Save as environment
+      </label>
+    </div>
+    <div id="env-name-row" class="mb-4 hidden">
+      <label class="login-label">Environment name</label>
+      <input id="f-env-name" class="login-input" type="text" placeholder="e.g. dev / staging / prod" />
+    </div>
+
+    <button id="login-btn" onclick="doLogin()"
+            class="w-full py-2.5 rounded-lg bg-blue-600 hover:bg-blue-500 text-white font-bold text-sm transition">
+      Login
+    </button>
+    <p id="login-err" class="text-red-400 text-xs mt-3 text-center hidden"></p>
+  </div>
+</div>
+
+<!-- ═══════════════════ TOP NAV ══════════════════════════════════════════════ -->
+<nav class="flex items-center gap-4 px-4 h-12 bg-slate-900 border-b border-slate-800 flex-shrink-0">
+  <span class="font-bold text-blue-400 text-sm mr-2">⬡ GDP SKE Manager</span>
+
+  <span class="text-slate-500 text-xs">Context:</span>
+  <span id="nav-ctx" class="text-amber-400 text-xs mono max-w-xs truncate">—</span>
+
+  <div class="flex-1"></div>
+
+  <!-- Session timer -->
+  <span class="text-slate-500 text-xs">Session:</span>
+  <span id="session-timer" class="mono text-xs font-bold session-dim">—</span>
+  <button onclick="doRenew()"
+          class="text-xs px-2 py-1 rounded bg-slate-800 text-green-400 hover:bg-green-950 transition">
+    Renew
+  </button>
+
+  <button onclick="doLogout()"
+          class="text-xs px-3 py-1 rounded bg-slate-800 text-amber-400 hover:bg-amber-950 transition ml-2">
+    Logout
+  </button>
+</nav>
+
+<!-- ═══════════════════ TOOLBAR ══════════════════════════════════════════════ -->
+<div class="flex items-center gap-2 px-3 py-2 bg-slate-900 border-b border-slate-800 flex-shrink-0 flex-wrap">
+
+  <!-- Namespace -->
+  <span class="text-slate-400 text-xs font-medium">Namespace</span>
+  <select id="ns-select" onchange="onNsChange()"
+          class="bg-slate-800 border border-slate-700 text-slate-200 text-xs rounded px-2 py-1.5 focus:border-blue-500 outline-none min-w-40">
+  </select>
+  <button onclick="addNs()" title="Pin a namespace"
+          class="w-6 h-6 rounded bg-slate-800 text-green-400 hover:bg-green-950 font-bold text-sm flex items-center justify-center transition">＋</button>
+  <button onclick="removeNs()" title="Unpin selected namespace"
+          class="w-6 h-6 rounded bg-slate-800 text-red-400 hover:bg-red-950 font-bold text-xs flex items-center justify-center transition">✕</button>
+  <label class="flex items-center gap-1 text-xs text-slate-400 ml-1 cursor-pointer">
+    <input id="chk-allns" type="checkbox" class="accent-blue-500" onchange="refresh()" />
+    All NS
+  </label>
+
+  <div class="h-5 w-px bg-slate-700 mx-1"></div>
+
+  <!-- Resource type -->
+  <span class="text-slate-400 text-xs font-medium">Resource</span>
+  <select id="res-select" onchange="refresh()"
+          class="bg-slate-800 border border-slate-700 text-slate-200 text-xs rounded px-2 py-1.5 focus:border-blue-500 outline-none min-w-36">
+    <option>pods</option><option>deployments</option><option>services</option>
+    <option>replicasets</option><option>statefulsets</option><option>daemonsets</option>
+    <option>configmaps</option><option>secrets</option><option>ingresses</option>
+    <option>persistentvolumeclaims</option><option>persistentvolumes</option>
+    <option>nodes</option><option>events</option><option>jobs</option>
+    <option>cronjobs</option><option>serviceaccounts</option>
+    <option>roles</option><option>rolebindings</option>
+    <option>clusterroles</option><option>namespaces</option>
+  </select>
+
+  <button onclick="refresh()"
+          class="flex items-center gap-1 px-3 py-1.5 rounded bg-blue-700 hover:bg-blue-600 text-white text-xs font-bold transition">
+    ⟳ Refresh
+  </button>
+  <button onclick="reloadNs()"
+          class="text-xs px-2.5 py-1.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 transition">
+    ↺ Reload NS
+  </button>
+
+  <div class="flex-1"></div>
+  <span id="row-count" class="text-slate-500 text-xs mono"></span>
+</div>
+
+<!-- ═══════════════════ ACTION TOOLBAR ═══════════════════════════════════════ -->
+<div class="flex items-center gap-1.5 px-3 py-1.5 bg-slate-950 border-b border-slate-800 flex-shrink-0 flex-wrap">
+  <button class="act-btn" onclick="doDescribe()" id="btn-describe" disabled>📋 Describe</button>
+  <button class="act-btn primary" onclick="doLogs()" id="btn-logs" disabled>📜 Logs</button>
+  <button class="act-btn" onclick="doEvents()" id="btn-events" disabled>⚡ Events</button>
+  <button class="act-btn" onclick="doYaml()" id="btn-yaml" disabled>📄 YAML</button>
+  <button class="act-btn" onclick="doExec()" id="btn-exec" disabled>💻 Exec Shell</button>
+  <button class="act-btn" onclick="doRestart()" id="btn-restart" disabled>↺ Restart</button>
+  <button class="act-btn" onclick="doScale()" id="btn-scale" disabled>⚖ Scale</button>
+  <button class="act-btn danger" onclick="doDelete()" id="btn-delete" disabled>🗑 Delete</button>
+  <span id="sel-info" class="text-slate-500 text-xs ml-2"></span>
+</div>
+
+<!-- ═══════════════════ MAIN CONTENT AREA ════════════════════════════════════ -->
+<div class="flex flex-col flex-1 overflow-hidden" id="main-area">
+
+  <!-- Resource table (flex-1, scrollable) -->
+  <div class="flex-1 overflow-auto bg-slate-950" id="table-wrapper" style="min-height:120px">
+    <table class="res-table w-full border-collapse" id="res-table">
+      <thead id="res-thead"><tr></tr></thead>
+      <tbody id="res-tbody">
+        <tr><td colspan="20" class="py-16 text-center text-slate-600 text-sm">
+          Login and select a resource to get started.
+        </td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <!-- Resize handle -->
+  <div id="resize-handle" title="Drag to resize"></div>
+
+  <!-- Output panel -->
+  <div class="flex flex-col bg-slate-900 border-t border-slate-800 flex-shrink-0"
+       id="output-panel" style="height:260px">
+
+    <!-- Tabs -->
+    <div class="flex items-center gap-0 border-b border-slate-800 px-3 bg-slate-900 flex-shrink-0">
+      <button class="tab-btn active" onclick="switchTab('output')"  id="tab-output">Output</button>
+      <button class="tab-btn"        onclick="switchTab('logs')"    id="tab-logs">Live Logs</button>
+      <button class="tab-btn"        onclick="switchTab('custom')"  id="tab-custom">Custom</button>
+      <button class="tab-btn"        onclick="switchTab('yaml')"    id="tab-yaml">YAML</button>
+      <div class="flex-1"></div>
+      <button onclick="clearOutput()" class="text-slate-600 hover:text-slate-300 text-xs px-2">Clear</button>
+    </div>
+
+    <!-- Output -->
+    <div id="pane-output" class="terminal flex-1 overflow-auto"></div>
+
+    <!-- Live Logs -->
+    <div id="pane-logs" class="hidden flex flex-col flex-1 overflow-hidden">
+      <div class="flex items-center gap-2 px-3 py-2 border-b border-slate-800 flex-shrink-0 flex-wrap">
+        <span class="text-slate-400 text-xs">Pod</span>
+        <select id="log-pod" onchange="onLogPodChange()"
+                class="bg-slate-800 border border-slate-700 text-xs text-slate-200 rounded px-2 py-1 outline-none focus:border-blue-500 min-w-40"></select>
+        <span class="text-slate-400 text-xs">Container</span>
+        <select id="log-cnt"
+                class="bg-slate-800 border border-slate-700 text-xs text-slate-200 rounded px-2 py-1 outline-none focus:border-blue-500"></select>
+        <span class="text-slate-400 text-xs">Tail</span>
+        <input id="log-tail" type="number" value="300" min="10" max="10000"
+               class="bg-slate-800 border border-slate-700 text-xs text-slate-200 rounded px-2 py-1 outline-none w-20" />
+        <label class="flex items-center gap-1 text-xs text-slate-400">
+          <input id="chk-prev" type="checkbox" class="accent-blue-500" /> Previous
+        </label>
+        <button onclick="startLogs()" id="btn-start-log"
+                class="px-3 py-1 rounded bg-green-800 hover:bg-green-700 text-white text-xs font-bold transition">
+          ▶ Start
+        </button>
+        <button onclick="stopLogs()"
+                class="px-3 py-1 rounded bg-red-800 hover:bg-red-700 text-white text-xs font-bold transition">
+          ■ Stop
+        </button>
+        <button onclick="clearLogs()" class="text-slate-600 hover:text-slate-300 text-xs ml-1">Clear</button>
+      </div>
+      <div id="log-output" class="terminal flex-1 overflow-auto"></div>
+    </div>
+
+    <!-- Custom -->
+    <div id="pane-custom" class="hidden flex flex-col flex-1 overflow-hidden">
+      <div class="flex gap-2 px-3 py-2 border-b border-slate-800 flex-shrink-0">
+        <input id="custom-cmd" type="text" value="kubectl "
+               class="flex-1 bg-slate-950 border border-slate-700 text-sm text-slate-200 mono rounded px-3 py-1.5 focus:border-blue-500 outline-none"
+               placeholder="kubectl get pods -n default"
+               onkeydown="if(event.key==='Enter')runCustom()" />
+        <button onclick="runCustom()"
+                class="px-4 py-1.5 rounded bg-blue-700 hover:bg-blue-600 text-white text-xs font-bold transition">
+          Run
+        </button>
+      </div>
+      <!-- Quick commands -->
+      <div class="flex flex-wrap gap-1.5 px-3 py-2 border-b border-slate-800 flex-shrink-0">
+        <button class="act-btn text-xs" onclick="quickCmd('kubectl get nodes -o wide')">Get nodes</button>
+        <button class="act-btn text-xs" onclick="quickCmd('kubectl cluster-info')">Cluster info</button>
+        <button class="act-btn text-xs" onclick="quickCmd('kubectl top nodes')">Top nodes</button>
+        <button class="act-btn text-xs" onclick="quickCmd('kubectl config get-contexts')">Contexts</button>
+        <button class="act-btn text-xs" onclick="quickCmd('kubectl config current-context')">Current ctx</button>
+        <button class="act-btn text-xs" onclick="quickCmd('kubectl api-resources')">API resources</button>
+        <button class="act-btn text-xs" onclick="quickCmd('kubectl get namespaces')">Namespaces</button>
+        <button class="act-btn text-xs" onclick="quickCmd('kubectl version --short')">Version</button>
+      </div>
+      <div id="custom-output" class="terminal flex-1 overflow-auto"></div>
+    </div>
+
+    <!-- YAML -->
+    <div id="pane-yaml" class="hidden flex flex-col flex-1 overflow-hidden">
+      <div class="flex gap-2 px-3 py-2 border-b border-slate-800 flex-shrink-0">
+        <button onclick="doYaml()" class="act-btn text-xs">Get YAML (selected)</button>
+        <button onclick="copyYaml()" class="act-btn text-xs">📋 Copy</button>
+        <button onclick="clearYaml()" class="text-slate-600 hover:text-slate-300 text-xs ml-auto">Clear</button>
+      </div>
+      <div id="yaml-output" class="terminal flex-1 overflow-auto" style="color:#c084fc"></div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════ CONTEXT MENU ════════════════════════════════════════ -->
+<div id="ctx-menu" class="hidden">
+  <div class="ctx-item" onclick="doDescribe()">📋 Describe</div>
+  <div class="ctx-item" onclick="doLogs()">📜 Logs</div>
+  <div class="ctx-item" onclick="doEvents()">⚡ Events</div>
+  <div class="ctx-item" onclick="doYaml()">📄 Get YAML</div>
+  <div class="ctx-sep"></div>
+  <div class="ctx-item" onclick="doExec()">💻 Exec Shell</div>
+  <div class="ctx-item" onclick="doRestart()">↺ Restart</div>
+  <div class="ctx-item" onclick="doScale()">⚖ Scale</div>
+  <div class="ctx-sep"></div>
+  <div class="ctx-item" onclick="doDelete()" style="color:#f87171">🗑 Delete</div>
+  <div class="ctx-item" onclick="copyName()">📋 Copy name</div>
+</div>
+
+<!-- Toast container -->
+<div id="toast-container"></div>
+
+<!-- ═══════════════════ SCALE MODAL ══════════════════════════════════════════ -->
+<div id="scale-modal" class="hidden fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-70">
+  <div class="bg-slate-900 border border-slate-700 rounded-xl p-6 w-72 shadow-2xl">
+    <h3 class="font-bold text-slate-200 mb-4">Scale Resource</h3>
+    <label class="login-label">Replicas</label>
+    <input id="scale-val" type="number" value="1" min="0" max="200"
+           class="login-input mb-4" onkeydown="if(event.key==='Enter')confirmScale()" />
+    <div class="flex gap-2">
+      <button onclick="confirmScale()"
+              class="flex-1 py-2 rounded bg-blue-700 hover:bg-blue-600 text-white text-sm font-bold transition">
+        Apply
+      </button>
+      <button onclick="closeModal('scale-modal')"
+              class="flex-1 py-2 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 text-sm transition">
+        Cancel
+      </button>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════ JAVASCRIPT ═══════════════════════════════════════════ -->
+<script>
+// ── State ─────────────────────────────────────────────────────────────────────
+const S = {
+  activeEnv:   '',
+  namespace:   'default',
+  resource:    'pods',
+  allNs:       false,
+  rows:        [],
+  headers:     [],
+  selected:    new Set(),   // indices
+  sortCol:     -1,
+  sortDir:     1,
+  logSource:   null,
+  sessionTimer: null,
+  pinnedNs:    [],
+};
+
+// ── Startup ───────────────────────────────────────────────────────────────────
+document.addEventListener('DOMContentLoaded', async () => {
+  document.getElementById('chk-save').addEventListener('change', () => {
+    document.getElementById('env-name-row').classList.toggle(
+      'hidden', !document.getElementById('chk-save').checked);
+  });
+  document.addEventListener('click', () => hideCtxMenu());
+  await loadEnvList();
+  startSessionPoll();
+});
+
+// ── Config / environments ─────────────────────────────────────────────────────
+async function loadEnvList() {
+  const r = await fetch('/api/config');
+  const d = await r.json();
+  const sel = document.getElementById('env-select');
+  sel.innerHTML = '<option value="">— select or fill in below —</option>';
+  for (const name of Object.keys(d.environments).sort()) {
+    const o = document.createElement('option');
+    o.value = name; o.textContent = name;
+    sel.appendChild(o);
+  }
+  if (d.last_environment) {
+    sel.value = d.last_environment;
+    loadEnv(d.environments[d.last_environment]);
+  }
+}
+
+function loadEnv(envData) {
+  const sel = document.getElementById('env-select');
+  const name = sel.value;
+  if (!name) return;
+  const r = envData || null;
+  // Need the data — re-fetch if not passed
+  if (!r) {
+    fetch('/api/config').then(x => x.json()).then(d => {
+      const env = d.environments[name];
+      if (!env) return;
+      _fillLogin(name, env);
+    });
+    return;
+  }
+  _fillLogin(name, r);
+}
+
+function _fillLogin(name, env) {
+  S.activeEnv = name;
+  S.pinnedNs  = env.pinned_namespaces || [];
+  document.getElementById('f-ske').value    = env.ske_url     || '';
+  document.getElementById('f-auth').value   = env.auth_url    || '';
+  document.getElementById('f-user').value   = env.username    || '';
+  document.getElementById('f-pass').value   = env.password    || '';
+  document.getElementById('f-skectl').value = env.skectl_path || '';
+  document.getElementById('f-env-name').value = name;
+}
+
+async function deleteEnv() {
+  const name = document.getElementById('env-select').value;
+  if (!name || !confirm(`Delete environment "${name}"?`)) return;
+  await fetch(`/api/config/${encodeURIComponent(name)}`, {method:'DELETE'});
+  await loadEnvList();
+  toast('Deleted', `Environment "${name}" removed.`, 'warn');
+}
+
+// ── Login ─────────────────────────────────────────────────────────────────────
+async function doLogin() {
+  const btn = document.getElementById('login-btn');
+  const err = document.getElementById('login-err');
+  btn.textContent = 'Logging in…'; btn.disabled = true;
+  err.classList.add('hidden');
+
+  const payload = {
+    ske_url:      document.getElementById('f-ske').value.trim(),
+    auth_url:     document.getElementById('f-auth').value.trim(),
+    username:     document.getElementById('f-user').value.trim(),
+    password:     document.getElementById('f-pass').value,
+    skectl_path:  document.getElementById('f-skectl').value.trim(),
+  };
+
+  const r = await fetch('/api/login', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify(payload)
+  });
+  const d = await r.json();
+  btn.textContent = 'Login'; btn.disabled = false;
+
+  if (!d.ok) {
+    err.textContent = d.error || 'Login failed.';
+    err.classList.remove('hidden');
+    return;
+  }
+
+  // Optionally save environment
+  if (document.getElementById('chk-save').checked) {
+    const envName = document.getElementById('f-env-name').value.trim()
+                 || document.getElementById('env-select').value
+                 || 'default';
+    await fetch('/api/config', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({
+        name: envName,
+        ...payload,
+        pinned_namespaces: S.pinnedNs,
+      })
+    });
+    S.activeEnv = envName;
+    await loadEnvList();
+  }
+
+  document.getElementById('login-overlay').classList.add('hidden');
+  await reloadNs();
+  refresh();
+  startSessionPoll();
+}
+
+function doLogout() {
+  S.logSource && S.logSource.close();
+  document.getElementById('login-overlay').classList.remove('hidden');
+  document.getElementById('nav-ctx').textContent = '—';
+  document.getElementById('session-timer').textContent = '—';
+}
+
+// ── Session timer ─────────────────────────────────────────────────────────────
+function startSessionPoll() {
+  clearInterval(S.sessionTimer);
+  S.sessionTimer = setInterval(pollSession, 30000);
+  pollSession();
+}
+
+async function pollSession() {
+  try {
+    const r = await fetch('/api/session');
+    const d = await r.json();
+    document.getElementById('nav-ctx').textContent = d.context || '—';
+    const el = document.getElementById('session-timer');
+    if (d.remaining === null) {
+      el.textContent = d.healthy ? 'active' : 'EXPIRED';
+      el.className = 'mono text-xs font-bold ' + (d.healthy ? 'session-ok' : 'session-danger');
+    } else {
+      el.textContent = fmtCountdown(d.remaining);
+      el.className   = 'mono text-xs font-bold ' + sessionClass(d.remaining);
+      if (d.remaining <= 300 && d.remaining > 270) {
+        toast('⚠ Session expiring', `Expires in ${fmtCountdown(d.remaining)}`, 'warn');
+      }
+      if (d.remaining <= 0) {
+        toast('✖ Session expired', 'Please renew or log in again.', 'error', 0);
+      }
+    }
+  } catch(_) {}
+}
+
+function sessionClass(secs) {
+  if (secs <= 120) return 'session-danger';
+  if (secs <= 300) return 'session-warn';
+  return 'session-ok';
+}
+
+function fmtCountdown(s) {
+  s = Math.max(0, s);
+  const h = Math.floor(s/3600), m = Math.floor((s%3600)/60), ss = s%60;
+  return h ? `${h}:${String(m).padStart(2,'0')}:${String(ss).padStart(2,'0')}`
+           : `${String(m).padStart(2,'0')}:${String(ss).padStart(2,'0')}`;
+}
+
+async function doRenew() {
+  const r = await fetch('/api/renew', {method:'POST'});
+  const d = await r.json();
+  toast(d.ok ? 'Session renewed' : 'Renew failed',
+        d.ok ? 'Token refreshed successfully.' : (d.error || ''),
+        d.ok ? 'ok' : 'error');
+  if (d.ok) pollSession();
+}
+
+// ── Namespaces ─────────────────────────────────────────────────────────────────
+async function reloadNs() {
+  const r = await fetch('/api/namespaces');
+  const d = await r.json();
+  if (!d.ok) { toast('Error', d.error, 'error'); return; }
+  const pinned   = S.pinnedNs;
+  const all      = [...pinned, ...d.namespaces.filter(n => !pinned.includes(n))];
+  const sel      = document.getElementById('ns-select');
+  const current  = sel.value || S.namespace;
+  sel.innerHTML  = '';
+  all.forEach(ns => {
+    const o = document.createElement('option');
+    o.value = ns;
+    o.textContent = pinned.includes(ns) ? `★ ${ns}` : ns;
+    sel.appendChild(o);
+  });
+  sel.value = all.includes(current) ? current : all[0];
+  S.namespace = sel.value;
+}
+
+function onNsChange() {
+  S.namespace = document.getElementById('ns-select').value;
+  refresh();
+}
+
+async function addNs() {
+  const ns = prompt('Namespace name to pin:');
+  if (!ns) return;
+  if (!S.pinnedNs.includes(ns)) S.pinnedNs.push(ns);
+  if (S.activeEnv) {
+    await fetch(`/api/config/${encodeURIComponent(S.activeEnv)}/namespaces`, {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({namespace: ns})
+    });
+  } else {
+    // No named env — persist under __default__
+    await fetch('/api/config', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({name:'__default__', pinned_namespaces: S.pinnedNs,
+                            ske_url:'', auth_url:'', username:'', skectl_path:''})
+    });
+  }
+  await reloadNs();
+  document.getElementById('ns-select').value = ns;
+  S.namespace = ns;
+  refresh();
+}
+
+async function removeNs() {
+  const ns = document.getElementById('ns-select').value;
+  if (!S.pinnedNs.includes(ns)) {
+    toast('Not pinned', `"${ns}" is a cluster namespace — only pinned namespaces can be removed.`, 'warn');
+    return;
+  }
+  if (!confirm(`Remove "${ns}" from pinned list?`)) return;
+  S.pinnedNs = S.pinnedNs.filter(n => n !== ns);
+  if (S.activeEnv) {
+    await fetch(`/api/config/${encodeURIComponent(S.activeEnv)}/namespaces/${encodeURIComponent(ns)}`, {method:'DELETE'});
+  }
+  await reloadNs();
+}
+
+// ── Resource table ─────────────────────────────────────────────────────────────
+async function refresh() {
+  S.resource = document.getElementById('res-select').value;
+  S.namespace = document.getElementById('ns-select').value;
+  S.allNs     = document.getElementById('chk-allns').checked;
+  S.selected.clear();
+  updateActionBtns();
+
+  const params = new URLSearchParams({
+    type: S.resource, namespace: S.namespace, all: S.allNs
+  });
+  const r = await fetch(`/api/resources?${params}`);
+  const d = await r.json();
+
+  appendOutput(`» ${d.command || ''}\n`, 'cmd');
+
+  if (!d.ok) { appendOutput(d.error + '\n', 'err'); return; }
+
+  S.headers = d.headers;
+  S.rows    = d.rows;
+  renderTable();
+  document.getElementById('row-count').textContent =
+    `${d.rows.length} ${S.resource}`;
+
+  // Populate log pod selector
+  if (S.resource === 'pods') {
+    const logPod = document.getElementById('log-pod');
+    const cur = logPod.value;
+    logPod.innerHTML = d.rows.map(r =>
+      `<option value="${r.cells[0]}">${r.cells[0]}</option>`).join('');
+    if (cur && d.rows.some(r => r.cells[0] === cur)) logPod.value = cur;
+  }
+}
+
+function renderTable() {
+  const thead = document.getElementById('res-thead');
+  const tbody = document.getElementById('res-tbody');
+
+  thead.innerHTML = '<tr>' + S.headers.map((h, i) => {
+    let cls = '';
+    if (i === S.sortCol) cls = S.sortDir === 1 ? 'sorted-asc' : 'sorted-desc';
+    return `<th class="${cls}" onclick="sortBy(${i})">${h}</th>`;
+  }).join('') + '</tr>';
+
+  if (!S.rows.length) {
+    tbody.innerHTML = `<tr><td colspan="${Math.max(S.headers.length,1)}"
+      class="py-12 text-center text-slate-600 text-sm">No ${S.resource} found.</td></tr>`;
+    return;
+  }
+
+  tbody.innerHTML = S.rows.map((row, i) => {
+    const cells = S.headers.map((_, ci) => row.cells[ci] || '');
+    const status = cells[1] || '';
+    const selClass = S.selected.has(i) ? 'selected' : '';
+    const tds = cells.map((c, ci) => {
+      const val = ci === 1 ? statusBadge(c) : escHtml(c);
+      return `<td>${val}</td>`;
+    }).join('');
+    return `<tr class="${selClass}" data-idx="${i}"
+               onclick="selectRow(event,${i})"
+               ondblclick="doDescribe()"
+               oncontextmenu="showCtxMenu(event,${i})">${tds}</tr>`;
+  }).join('');
+}
+
+function statusBadge(s) {
+  const up = s.toUpperCase();
+  let cls = 'badge-gray';
+  if (/RUNNING|ACTIVE|BOUND|COMPLETE/.test(up))          cls = 'badge-green';
+  else if (/ERROR|CRASHLOOP|OOMKILL|FAILED|BACKOFF/.test(up)) cls = 'badge-red';
+  else if (/PENDING|TERMINAT|UNKNOWN|INIT/.test(up))     cls = 'badge-yellow';
+  else if (/AVAILABLE/.test(up))                          cls = 'badge-blue';
+  return `<span class="badge ${cls}">${escHtml(s)}</span>`;
+}
+
+function sortBy(col) {
+  if (S.sortCol === col) S.sortDir *= -1;
+  else { S.sortCol = col; S.sortDir = 1; }
+  S.rows.sort((a, b) => {
+    const av = (a.cells[col] || ''), bv = (b.cells[col] || '');
+    return av.localeCompare(bv, undefined, {numeric:true}) * S.sortDir;
+  });
+  renderTable();
+}
+
+function selectRow(e, idx) {
+  if (e.ctrlKey || e.metaKey) {
+    S.selected.has(idx) ? S.selected.delete(idx) : S.selected.add(idx);
+  } else if (e.shiftKey && S.selected.size > 0) {
+    const last = Math.max(...S.selected);
+    const lo = Math.min(last, idx), hi = Math.max(last, idx);
+    for (let i = lo; i <= hi; i++) S.selected.add(i);
+  } else {
+    S.selected.clear();
+    S.selected.add(idx);
+  }
+  renderTable();
+  updateActionBtns();
+
+  // When a pod is selected, update log pod selector
+  if (S.resource === 'pods' && S.selected.size === 1) {
+    const name = selectedNames()[0];
+    const logPod = document.getElementById('log-pod');
+    if (name) { logPod.value = name; onLogPodChange(); }
+  }
+}
+
+function selectedNames() {
+  return [...S.selected].map(i => S.rows[i]?.cells[0]).filter(Boolean);
+}
+
+function updateActionBtns() {
+  const n = S.selected.size;
+  ['btn-describe','btn-logs','btn-events','btn-yaml',
+   'btn-exec','btn-restart','btn-scale','btn-delete'].forEach(id => {
+    document.getElementById(id).disabled = (n === 0);
+  });
+  document.getElementById('sel-info').textContent =
+    n > 0 ? `${n} selected` : '';
+}
+
+// ── Context menu ──────────────────────────────────────────────────────────────
+function showCtxMenu(e, idx) {
+  e.preventDefault();
+  if (!S.selected.has(idx)) { S.selected.clear(); S.selected.add(idx); renderTable(); updateActionBtns(); }
+  const m = document.getElementById('ctx-menu');
+  m.style.left = e.clientX + 'px';
+  m.style.top  = e.clientY + 'px';
+  m.classList.remove('hidden');
+}
+function hideCtxMenu() { document.getElementById('ctx-menu').classList.add('hidden'); }
+
+// ── Actions ───────────────────────────────────────────────────────────────────
+async function doDescribe() {
+  const names = selectedNames(); if (!names.length) return;
+  switchTab('output');
+  for (const name of names) {
+    const p = new URLSearchParams({type: S.resource, name, namespace: S.namespace, all: S.allNs});
+    const r = await fetch(`/api/describe?${p}`);
+    const d = await r.json();
+    appendOutput(`» ${d.command}\n`, 'cmd');
+    appendOutput(d.output + '\n', d.ok ? '' : 'err');
+  }
+}
+
+async function doYaml() {
+  const names = selectedNames(); if (!names.length) return;
+  switchTab('yaml');
+  const p = new URLSearchParams({type: S.resource, name: names[0], namespace: S.namespace, all: S.allNs});
+  const r = await fetch(`/api/yaml?${p}`);
+  const d = await r.json();
+  const el = document.getElementById('yaml-output');
+  el.textContent = d.output;
+  el.scrollTop = 0;
+}
+
+async function doEvents() {
+  const names = selectedNames();
+  switchTab('output');
+  const p = new URLSearchParams({
+    namespace: S.namespace, all: S.allNs,
+    ...(names.length ? {name: names[0]} : {})
+  });
+  const r = await fetch(`/api/events?${p}`);
+  const d = await r.json();
+  appendOutput(`» ${d.command}\n`, 'cmd');
+  appendOutput(d.output + '\n', d.ok ? '' : 'err');
+}
+
+async function doDelete() {
+  const names = selectedNames(); if (!names.length) return;
+  const ns = S.namespace;
+  if (!confirm(`Delete ${names.length} ${S.resource}(s) in "${ns}"?\n${names.slice(0,5).join(', ')}${names.length>5?'…':''}\n\nThis cannot be undone!`)) return;
+  switchTab('output');
+  const r = await fetch('/api/delete', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({type: S.resource, names, namespace: ns, all: S.allNs})
+  });
+  const d = await r.json();
+  d.results.forEach(res => {
+    appendOutput(`» ${res.command}\n`, 'cmd');
+    appendOutput(res.output + '\n', res.ok ? 'ok' : 'err');
+  });
+  refresh();
+}
+
+async function doRestart() {
+  const names = selectedNames(); if (!names.length) return;
+  const allowed = ['deployments','daemonsets','statefulsets'];
+  if (!allowed.includes(S.resource)) {
+    toast('Not supported', 'Restart works for deployments, daemonsets, statefulsets.', 'warn'); return;
+  }
+  switchTab('output');
+  for (const name of names) {
+    const r = await fetch('/api/restart', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({type: S.resource, name, namespace: S.namespace})
+    });
+    const d = await r.json();
+    appendOutput(`» ${d.command}\n`, 'cmd');
+    appendOutput(d.output + '\n', d.ok ? 'ok' : 'err');
+  }
+}
+
+function doScale() {
+  const names = selectedNames(); if (!names.length) return;
+  const allowed = ['deployments','replicasets','statefulsets'];
+  if (!allowed.includes(S.resource)) {
+    toast('Not supported', 'Scale works for deployments, replicasets, statefulsets.', 'warn'); return;
+  }
+  document.getElementById('scale-modal').classList.remove('hidden');
+}
+
+async function confirmScale() {
+  closeModal('scale-modal');
+  const names    = selectedNames(); if (!names.length) return;
+  const replicas = parseInt(document.getElementById('scale-val').value, 10);
+  switchTab('output');
+  for (const name of names) {
+    const r = await fetch('/api/scale', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({type: S.resource, name, namespace: S.namespace, replicas})
+    });
+    const d = await r.json();
+    appendOutput(`» ${d.command}\n`, 'cmd');
+    appendOutput(d.output + '\n', d.ok ? 'ok' : 'err');
+  }
+}
+
+function doExec() {
+  const names = selectedNames(); if (!names.length) return;
+  const name  = names[0];
+  const ns    = S.namespace;
+  const cmd   = `kubectl exec -it ${name} -n ${ns} -- /bin/bash`;
+  // Offer to copy the command since we can't open a terminal from a web page
+  if (confirm(`Copy kubectl exec command to clipboard?\n\n${cmd}`)) {
+    navigator.clipboard.writeText(cmd).then(
+      () => toast('Copied', 'Paste into your terminal.', 'ok'),
+      () => { prompt('Copy this command:', cmd); }
+    );
+  }
+}
+
+function copyName() {
+  const names = selectedNames();
+  if (names.length) navigator.clipboard.writeText(names.join('\n'))
+    .then(() => toast('Copied', names.join(', '), 'ok'));
+}
+
+// ── Live Logs ─────────────────────────────────────────────────────────────────
+async function onLogPodChange() {
+  const pod = document.getElementById('log-pod').value;
+  const ns  = document.getElementById('ns-select').value;
+  if (!pod) return;
+  const r = await fetch(`/api/containers?pod=${encodeURIComponent(pod)}&namespace=${encodeURIComponent(ns)}`);
+  const d = await r.json();
+  const sel = document.getElementById('log-cnt');
+  sel.innerHTML = '<option value="">— all —</option>' +
+    (d.containers || []).map(c => `<option>${c}</option>`).join('');
+}
+
+function doLogs() {
+  switchTab('logs');
+  const names = selectedNames();
+  if (names.length && S.resource === 'pods') {
+    document.getElementById('log-pod').value = names[0];
+    onLogPodChange();
+  }
+  startLogs();
+}
+
+function startLogs() {
+  S.logSource && S.logSource.close();
+  const pod  = document.getElementById('log-pod').value;
+  const cnt  = document.getElementById('log-cnt').value;
+  const tail = document.getElementById('log-tail').value || '300';
+  const prev = document.getElementById('chk-prev').checked;
+  const ns   = document.getElementById('ns-select').value;
+  if (!pod) { toast('No pod', 'Select a pod first.', 'warn'); return; }
+
+  const out = document.getElementById('log-output');
+  out.innerHTML += `<span class="t-info">═══ ${pod}${cnt?' ['+cnt+']':''} tail=${tail} ═══\n</span>`;
+
+  const params = new URLSearchParams({pod, namespace:ns, container:cnt, tail, previous:prev});
+  S.logSource = new EventSource(`/api/logs/stream?${params}`);
+
+  S.logSource.onmessage = e => {
+    const msg  = JSON.parse(e.data);
+    if (msg.type === 'cmd')  { appendLogLine(`» ${msg.text}`, 'cmd'); return; }
+    if (msg.type === 'done') { appendLogLine('[stream ended]', 'dim'); S.logSource.close(); return; }
+    appendLogLine(msg.text);
+  };
+  S.logSource.onerror = () => { appendLogLine('[stream error / disconnected]', 'err'); };
+}
+
+function stopLogs() {
+  S.logSource && S.logSource.close();
+  fetch('/api/logs/stop', {method:'POST'});
+  appendLogLine('[stopped]', 'dim');
+}
+
+function appendLogLine(text, forceTag) {
+  const el  = document.getElementById('log-output');
+  const tag = forceTag || logTag(text);
+  const span = document.createElement('span');
+  span.className = tag ? `log-${tag}` : '';
+  span.textContent = text + '\n';
+  el.appendChild(span);
+  el.scrollTop = el.scrollHeight;
+}
+
+function logTag(line) {
+  const l = line.toLowerCase();
+  if (/error|exception|fatal|panic/.test(l)) return 'error';
+  if (/warn/.test(l))  return 'warn';
+  if (/\binfo\b|\bdebug\b/.test(l)) return 'info';
+  return '';
+}
+
+function clearLogs() { document.getElementById('log-output').innerHTML = ''; }
+
+// ── Custom command ─────────────────────────────────────────────────────────────
+async function runCustom() {
+  const cmd = document.getElementById('custom-cmd').value.trim();
+  if (!cmd) return;
+  switchTab('custom');
+  const el = document.getElementById('custom-output');
+  el.innerHTML += `<span class="t-cmd">» ${escHtml(cmd)}\n</span>`;
+  const r = await fetch('/api/command', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({cmd})
+  });
+  const d = await r.json();
+  const span = document.createElement('span');
+  span.className = d.ok ? 't-ok' : 't-err';
+  span.textContent = d.output + '\n';
+  el.appendChild(span);
+  el.scrollTop = el.scrollHeight;
+}
+
+function quickCmd(cmd) {
+  document.getElementById('custom-cmd').value = cmd;
+  runCustom();
+}
+
+// ── Output helpers ─────────────────────────────────────────────────────────────
+function appendOutput(text, tag) {
+  const el   = document.getElementById('pane-output');
+  const span = document.createElement('span');
+  span.className = tag ? `t-${tag}` : '';
+  span.textContent = text;
+  el.appendChild(span);
+  el.scrollTop = el.scrollHeight;
+}
+
+function clearOutput() {
+  const id = {output:'pane-output', logs:'log-output',
+               custom:'custom-output', yaml:'yaml-output'}[currentTab()];
+  if (id) document.getElementById(id).innerHTML = '';
+}
+
+function clearYaml() { document.getElementById('yaml-output').textContent = ''; }
+
+function copyYaml() {
+  const txt = document.getElementById('yaml-output').textContent;
+  if (txt) navigator.clipboard.writeText(txt)
+    .then(() => toast('Copied', 'YAML copied to clipboard.', 'ok'));
+}
+
+// ── Tabs ──────────────────────────────────────────────────────────────────────
+function switchTab(name) {
+  ['output','logs','custom','yaml'].forEach(t => {
+    document.getElementById(`pane-${t}`)?.classList.toggle('hidden', t !== name);
+    document.getElementById(`tab-${t}`)?.classList.toggle('active', t === name);
+  });
+  document.getElementById(`pane-${name}`)?.classList.remove('hidden');
+}
+
+function currentTab() {
+  for (const t of ['output','logs','custom','yaml'])
+    if (!document.getElementById(`pane-${t}`)?.classList.contains('hidden')) return t;
+  return 'output';
+}
+
+// ── Toast ─────────────────────────────────────────────────────────────────────
+function toast(title, msg, type='ok', duration=5000) {
+  const colors = {ok:'#166534,#bbf7d0', error:'#450a0a,#fca5a5',
+                  warn:'#451a03,#fde68a', info:'#172554,#bfdbfe'};
+  const [bg, fg] = (colors[type]||colors.info).split(',');
+  const el = document.createElement('div');
+  el.className = 'toast';
+  el.style.background = bg; el.style.color = fg;
+  el.innerHTML = `<div><div style="font-weight:700;font-size:13px">${escHtml(title)}</div>
+    <div style="font-size:12px;margin-top:2px;opacity:.85">${escHtml(msg)}</div></div>`;
+  el.onclick = () => el.remove();
+  document.getElementById('toast-container').appendChild(el);
+  if (duration > 0) setTimeout(() => el.remove(), duration);
+}
+
+// ── Resize handle ─────────────────────────────────────────────────────────────
+(function() {
+  const handle  = document.getElementById('resize-handle');
+  const panel   = document.getElementById('output-panel');
+  const wrapper = document.getElementById('table-wrapper');
+  let dragging  = false, startY = 0, startH = 0;
+
+  handle.addEventListener('mousedown', e => {
+    dragging = true; startY = e.clientY; startH = panel.offsetHeight;
+    document.body.style.cursor = 'ns-resize';
+    document.body.style.userSelect = 'none';
+  });
+  document.addEventListener('mousemove', e => {
+    if (!dragging) return;
+    const delta = startY - e.clientY;
+    const newH  = Math.min(Math.max(startH + delta, 80), window.innerHeight - 150);
+    panel.style.height = newH + 'px';
+  });
+  document.addEventListener('mouseup', () => {
+    dragging = false;
+    document.body.style.cursor = '';
+    document.body.style.userSelect = '';
+  });
+})();
+
+// ── Modals ────────────────────────────────────────────────────────────────────
+function closeModal(id) { document.getElementById(id).classList.add('hidden'); }
+
+// ── Utils ─────────────────────────────────────────────────────────────────────
+function escHtml(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+</script>
+</body>
+</html>
