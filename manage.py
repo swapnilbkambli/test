@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-SKE Manager — GUI for RKE2/Kubernetes (SKE) Platform
+GDP SKE Manager — GUI for GDP Kubernetes (SKE) Platform
 Dependencies: Python 3.x only (tkinter is bundled with Python on Windows)
 Usage:  python ske_manager.py
 """
@@ -190,7 +190,7 @@ def _save_config(cfg: dict):
 class App:
     def __init__(self, root: tk.Tk):
         self.root = root
-        self.root.title("SKE Manager")
+        self.root.title("GDP SKE Manager")
         self.root.geometry("1340x860")
         self.root.minsize(960, 640)
         self.root.configure(bg=BG)
@@ -294,7 +294,7 @@ class App:
         card = tk.Frame(self.login_frame, bg=SURFACE, padx=36, pady=30)
         card.place(relx=0.5, rely=0.5, anchor="center")
 
-        tk.Label(card, text="SKE Manager", bg=SURFACE, fg=ACCENT,
+        tk.Label(card, text="GDP SKE Manager", bg=SURFACE, fg=ACCENT,
                  font=("Consolas", 22, "bold")).grid(
                      row=0, column=0, columnspan=3, pady=(0, 18))
 
@@ -562,7 +562,7 @@ class App:
         top = tk.Frame(self.main_frame, bg=SURFACE, pady=7, padx=10)
         top.pack(fill="x", side="top")
 
-        tk.Label(top, text="SKE Manager", bg=SURFACE, fg=ACCENT,
+        tk.Label(top, text="GDP SKE Manager", bg=SURFACE, fg=ACCENT,
                  font=("Consolas", 13, "bold")).pack(side="left", padx=(0, 12))
 
         tk.Label(top, text="Context:", bg=SURFACE, fg=DIM,
