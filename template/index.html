@@ -5,15 +5,17 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>GDP SKE Manager</title>
 <script src="https://cdn.tailwindcss.com"></script>
+<!-- xterm.js for in-browser pod terminal -->
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm@4.19.0/css/xterm.css" />
+<script src="https://cdn.jsdelivr.net/npm/xterm@4.19.0/lib/xterm.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/xterm-addon-fit@0.5.0/lib/xterm-addon-fit.js"></script>
 <script>
   tailwind.config = {
     darkMode: 'class',
     theme: {
       extend: {
         fontFamily: { mono: ['Consolas', 'Monaco', 'monospace'] },
-        colors: {
-          brand: { DEFAULT: '#3b82f6', dark: '#1d4ed8' }
-        }
+        colors: { brand: { DEFAULT: '#3b82f6', dark: '#1d4ed8' } }
       }
     }
   }
@@ -23,64 +25,45 @@
   body { font-family: 'Inter', 'Segoe UI', system-ui, sans-serif; }
   .mono { font-family: Consolas, Monaco, 'Courier New', monospace; }
 
-  /* Scrollbar */
   ::-webkit-scrollbar { width: 6px; height: 6px; }
   ::-webkit-scrollbar-track { background: #0f172a; }
   ::-webkit-scrollbar-thumb { background: #334155; border-radius: 3px; }
   ::-webkit-scrollbar-thumb:hover { background: #475569; }
 
-  /* Terminal output */
   .terminal {
-    background: #0d1117;
-    color: #c9d1d9;
-    font-family: Consolas, Monaco, monospace;
-    font-size: 12.5px;
-    line-height: 1.6;
-    white-space: pre-wrap;
-    word-break: break-all;
-    overflow-y: auto;
-    padding: 12px 14px;
+    background: #0d1117; color: #c9d1d9;
+    font-family: Consolas, Monaco, monospace; font-size: 12.5px;
+    line-height: 1.6; white-space: pre-wrap; word-break: break-all;
+    overflow-y: auto; padding: 12px 14px;
   }
-  .terminal .t-cmd    { color: #58a6ff; }
-  .terminal .t-ok     { color: #3fb950; }
-  .terminal .t-err    { color: #f85149; }
-  .terminal .t-warn   { color: #d29922; }
-  .terminal .t-info   { color: #79c0ff; }
-  .terminal .t-dim    { color: #8b949e; }
+  .terminal .t-cmd  { color: #58a6ff; }
+  .terminal .t-ok   { color: #3fb950; }
+  .terminal .t-err  { color: #f85149; }
+  .terminal .t-warn { color: #d29922; }
+  .terminal .t-info { color: #79c0ff; }
+  .terminal .t-dim  { color: #8b949e; }
 
-  /* Log line colouring */
   .log-error { color: #f85149; }
   .log-warn  { color: #d29922; }
   .log-info  { color: #58a6ff; }
 
-  /* Table */
   .res-table th {
-    background: #1e293b;
-    color: #94a3b8;
-    font-size: 11px;
-    font-weight: 600;
-    letter-spacing: .05em;
-    text-transform: uppercase;
-    cursor: pointer;
-    user-select: none;
-    padding: 8px 12px;
-    white-space: nowrap;
+    background: #1e293b; color: #94a3b8; font-size: 11px; font-weight: 600;
+    letter-spacing: .05em; text-transform: uppercase; cursor: pointer;
+    user-select: none; padding: 8px 12px; white-space: nowrap;
     border-bottom: 1px solid #1e293b;
   }
   .res-table th:hover { color: #e2e8f0; background: #263145; }
   .res-table th.sorted-asc::after  { content: ' ▲'; font-size:9px; }
   .res-table th.sorted-desc::after { content: ' ▼'; font-size:9px; }
   .res-table td {
-    padding: 7px 12px;
-    font-size: 13px;
-    border-bottom: 1px solid #1e293b;
-    white-space: nowrap;
-    font-family: Consolas, monospace;
+    padding: 7px 12px; font-size: 13px; border-bottom: 1px solid #1e293b;
+    white-space: nowrap; font-family: Consolas, monospace;
   }
   .res-table tr.selected td { background: #1e3a5f !important; }
   .res-table tr:hover td   { background: #1a2744; }
+  .res-table tr.hidden-row { display: none; }
 
-  /* Status badges */
   .badge { display:inline-block; padding:1px 7px; border-radius:999px;
            font-size:11px; font-weight:600; font-family:Consolas,monospace; }
   .badge-green  { background:#14532d; color:#4ade80; }
@@ -89,50 +72,36 @@
   .badge-blue   { background:#172554; color:#93c5fd; }
   .badge-gray   { background:#1e293b; color:#94a3b8; }
 
-  /* Resize handle between table and output panel */
-  #resize-handle {
-    height: 5px; cursor: ns-resize;
-    background: #1e293b;
-    flex-shrink: 0;
-  }
-  #resize-handle:hover { background: #3b82f6; }
+  #resize-handle { height:5px; cursor:ns-resize; background:#1e293b; flex-shrink:0; }
+  #resize-handle:hover { background:#3b82f6; }
 
-  /* Toast */
   #toast-container {
-    position: fixed; bottom: 20px; right: 20px;
-    z-index: 9999; display: flex; flex-direction: column; gap: 8px;
+    position:fixed; bottom:20px; right:20px; z-index:9999;
+    display:flex; flex-direction:column; gap:8px;
   }
   .toast {
-    min-width: 280px; max-width: 380px;
-    padding: 12px 16px; border-radius: 8px;
-    font-size: 13px; box-shadow: 0 4px 24px rgba(0,0,0,.5);
-    animation: slide-in .2s ease-out;
-    display: flex; align-items: flex-start; gap: 10px;
+    min-width:280px; max-width:380px; padding:12px 16px; border-radius:8px;
+    font-size:13px; box-shadow:0 4px 24px rgba(0,0,0,.5);
+    animation:slide-in .2s ease-out; display:flex; align-items:flex-start; gap:10px;
   }
-  @keyframes slide-in { from { transform: translateX(110%); opacity:0; } to { transform:translateX(0); opacity:1; } }
+  @keyframes slide-in { from{transform:translateX(110%);opacity:0} to{transform:translateX(0);opacity:1} }
 
-  /* Context menu */
   #ctx-menu {
-    position: fixed; z-index: 9000; min-width: 180px;
-    background: #1e293b; border: 1px solid #334155;
-    border-radius: 6px; padding: 4px 0;
-    box-shadow: 0 8px 32px rgba(0,0,0,.6);
-    font-size: 13px;
+    position:fixed; z-index:9000; min-width:190px;
+    background:#1e293b; border:1px solid #334155; border-radius:6px;
+    padding:4px 0; box-shadow:0 8px 32px rgba(0,0,0,.6); font-size:13px;
   }
-  .ctx-item {
-    padding: 7px 16px; cursor: pointer; color: #e2e8f0;
-  }
-  .ctx-item:hover { background: #3b82f6; color: #fff; }
-  .ctx-sep { height: 1px; background: #334155; margin: 4px 0; }
+  .ctx-item { padding:7px 16px; cursor:pointer; color:#e2e8f0; }
+  .ctx-item:hover { background:#3b82f6; color:#fff; }
+  .ctx-sep { height:1px; background:#334155; margin:4px 0; }
 
-  /* Tabs */
-  .tab-btn { padding: 6px 16px; font-size:12px; font-weight:600;
-             color:#94a3b8; border-bottom: 2px solid transparent;
-             cursor:pointer; white-space:nowrap; transition:color .15s; }
+  .tab-btn {
+    padding:6px 14px; font-size:12px; font-weight:600; color:#94a3b8;
+    border-bottom:2px solid transparent; cursor:pointer; white-space:nowrap; transition:color .15s;
+  }
   .tab-btn:hover { color:#e2e8f0; }
   .tab-btn.active { color:#3b82f6; border-bottom-color:#3b82f6; }
 
-  /* Action toolbar buttons */
   .act-btn {
     display:inline-flex; align-items:center; gap:5px;
     padding:5px 11px; border-radius:5px; font-size:12px; font-weight:600;
@@ -141,38 +110,82 @@
   }
   .act-btn:hover { background:#334155; color:#f1f5f9; }
   .act-btn:disabled { opacity:.35; cursor:not-allowed; }
-  .act-btn.danger { background:#450a0a; color:#fca5a5; }
+  .act-btn.danger  { background:#450a0a; color:#fca5a5; }
   .act-btn.danger:hover { background:#7f1d1d; }
   .act-btn.primary { background:#1e3a5f; color:#93c5fd; }
   .act-btn.primary:hover { background:#1d4ed8; color:#fff; }
+  .act-btn.success { background:#14532d; color:#86efac; }
+  .act-btn.success:hover { background:#166534; }
 
-  /* Session indicator */
   .session-ok     { color: #4ade80; }
   .session-warn   { color: #fbbf24; }
   .session-danger { color: #f87171; }
   .session-dim    { color: #64748b; }
 
-  /* Login card */
   .login-input {
-    width:100%; background:#0f172a; border:1px solid #334155;
-    border-radius:6px; padding:9px 12px; color:#e2e8f0; font-size:14px;
-    outline:none; transition:border-color .15s;
+    width:100%; background:#0f172a; border:1px solid #334155; border-radius:6px;
+    padding:9px 12px; color:#e2e8f0; font-size:14px; outline:none; transition:border-color .15s;
   }
   .login-input:focus { border-color:#3b82f6; }
   .login-label { display:block; font-size:12px; color:#94a3b8; margin-bottom:5px; font-weight:500; }
+
+  /* Health cards */
+  .health-card {
+    flex:1; min-width:90px; padding:14px 10px; border-radius:8px;
+    text-align:center; border:1px solid #1e293b;
+  }
+  .health-card .count { font-size:28px; font-weight:700; font-family:Consolas,monospace; }
+  .health-card .label { font-size:11px; font-weight:600; text-transform:uppercase;
+                        letter-spacing:.05em; margin-top:4px; }
+
+  /* Topology tree */
+  .topo-node {
+    border:1px solid #334155; border-radius:6px; padding:10px 14px; margin-bottom:8px;
+    background:#0f172a;
+  }
+  .topo-node-header { display:flex; align-items:center; gap:8px; font-weight:600; }
+  .topo-pods { margin-top:8px; padding-left:16px; display:flex; flex-wrap:wrap; gap:6px; }
+  .topo-pod {
+    padding:3px 10px; border-radius:4px; font-size:11px;
+    font-family:Consolas,monospace; border:1px solid #334155;
+  }
+
+  /* Modal overlay */
+  .modal-overlay {
+    display:none; position:fixed; inset:0; z-index:50;
+    background:rgba(0,0,0,.7); align-items:center; justify-content:center;
+  }
+  .modal-overlay.open { display:flex; }
+
+  /* xterm container */
+  #xterm-container { background:#0d1117; padding:8px; border-radius:4px; }
+  #xterm-container .xterm { padding:0; }
+
+  /* Port forward table */
+  .pf-table td, .pf-table th {
+    padding:6px 10px; font-size:12px; font-family:Consolas,monospace; border-bottom:1px solid #1e293b;
+  }
+  .pf-table th { background:#1e293b; color:#94a3b8; font-size:11px; text-transform:uppercase; }
+
+  /* Editor key-value rows */
+  .editor-row { display:flex; gap:6px; align-items:flex-start; margin-bottom:6px; }
+  .editor-key { width:160px; flex-shrink:0; }
+  .editor-val { flex:1; }
+  .editor-del { cursor:pointer; color:#f87171; padding:4px 8px; border-radius:4px;
+                background:#450a0a; font-size:12px; border:none; transition:background .15s; }
+  .editor-del:hover { background:#7f1d1d; }
 </style>
 </head>
 
 <body class="bg-slate-950 text-slate-200 h-full flex flex-col overflow-hidden">
 
-<!-- ═══════════════════ LOGIN OVERLAY ════════════════════════════════════════ -->
+<!-- ═══ LOGIN OVERLAY ═════════════════════════════════════════════════════════ -->
 <div id="login-overlay"
      class="fixed inset-0 z-50 flex items-center justify-center bg-slate-950 bg-opacity-95">
   <div class="w-full max-w-md bg-slate-900 border border-slate-700 rounded-xl shadow-2xl p-8">
     <h1 class="text-2xl font-bold text-blue-400 mb-1 text-center">GDP SKE Manager</h1>
     <p class="text-slate-500 text-xs text-center mb-6">GDP K8S Platform</p>
 
-    <!-- Environment selector -->
     <div class="mb-5">
       <label class="login-label">Saved Environment</label>
       <div class="flex gap-2">
@@ -190,15 +203,14 @@
 
     <div class="h-px bg-slate-700 mb-5"></div>
 
-    <!-- Credential fields -->
     <div class="space-y-3 mb-4">
       <div>
         <label class="login-label">SKE URL</label>
-        <input id="f-ske"  class="login-input" type="url"  placeholder="https://ske.your-company.com" />
+        <input id="f-ske" class="login-input" type="url" placeholder="https://ske.your-company.com" />
       </div>
       <div>
         <label class="login-label">Auth URL</label>
-        <input id="f-auth" class="login-input" type="url"  placeholder="https://auth.your-company.com" />
+        <input id="f-auth" class="login-input" type="url" placeholder="https://auth.your-company.com" />
       </div>
       <div class="flex gap-3">
         <div class="flex-1">
@@ -217,7 +229,6 @@
       </div>
     </div>
 
-    <!-- Save options -->
     <div class="flex items-center gap-4 mb-5 text-sm text-slate-400">
       <label class="flex items-center gap-2 cursor-pointer">
         <input id="chk-save" type="checkbox" class="accent-blue-500" />
@@ -237,14 +248,22 @@
   </div>
 </div>
 
-<!-- ═══════════════════ TOP NAV ══════════════════════════════════════════════ -->
-<nav class="flex items-center gap-4 px-4 h-12 bg-slate-900 border-b border-slate-800 flex-shrink-0">
-  <span class="font-bold text-blue-400 text-sm mr-2">⬡ GDP SKE Manager</span>
+<!-- ═══ TOP NAV ═══════════════════════════════════════════════════════════════ -->
+<nav class="flex items-center gap-3 px-4 h-12 bg-slate-900 border-b border-slate-800 flex-shrink-0 flex-wrap">
+  <span class="font-bold text-blue-400 text-sm mr-1">⬡ GDP SKE Manager</span>
 
   <span class="text-slate-500 text-xs">Context:</span>
-  <span id="nav-ctx" class="text-amber-400 text-xs mono max-w-xs truncate">—</span>
+  <select id="ctx-switcher" onchange="switchCtx()"
+          class="bg-transparent border-0 text-amber-400 text-xs mono max-w-xs outline-none cursor-pointer hover:text-amber-300">
+    <option class="bg-slate-800">—</option>
+  </select>
 
   <div class="flex-1"></div>
+
+  <!-- Alert badge -->
+  <span id="alert-badge"
+        class="hidden text-xs px-2 py-0.5 rounded-full bg-red-900 text-red-300 font-bold cursor-pointer"
+        onclick="switchTab('health')" title="Click to view health"></span>
 
   <!-- Session timer -->
   <span class="text-slate-500 text-xs">Session:</span>
@@ -255,15 +274,14 @@
   </button>
 
   <button onclick="doLogout()"
-          class="text-xs px-3 py-1 rounded bg-slate-800 text-amber-400 hover:bg-amber-950 transition ml-2">
+          class="text-xs px-3 py-1 rounded bg-slate-800 text-amber-400 hover:bg-amber-950 transition ml-1">
     Logout
   </button>
 </nav>
 
-<!-- ═══════════════════ TOOLBAR ══════════════════════════════════════════════ -->
+<!-- ═══ TOOLBAR ═══════════════════════════════════════════════════════════════ -->
 <div class="flex items-center gap-2 px-3 py-2 bg-slate-900 border-b border-slate-800 flex-shrink-0 flex-wrap">
 
-  <!-- Namespace -->
   <span class="text-slate-400 text-xs font-medium">Namespace</span>
   <select id="ns-select" onchange="onNsChange()"
           class="bg-slate-800 border border-slate-700 text-slate-200 text-xs rounded px-2 py-1.5 focus:border-blue-500 outline-none min-w-40">
@@ -279,7 +297,6 @@
 
   <div class="h-5 w-px bg-slate-700 mx-1"></div>
 
-  <!-- Resource type -->
   <span class="text-slate-400 text-xs font-medium">Resource</span>
   <select id="res-select" onchange="refresh()"
           class="bg-slate-800 border border-slate-700 text-slate-200 text-xs rounded px-2 py-1.5 focus:border-blue-500 outline-none min-w-36">
@@ -302,27 +319,48 @@
     ↺ Reload NS
   </button>
 
+  <div class="h-5 w-px bg-slate-700 mx-1"></div>
+
+  <!-- Search/filter -->
+  <input id="search-input" type="text" placeholder="🔍 Filter..."
+         oninput="filterTable()"
+         class="bg-slate-800 border border-slate-700 text-xs text-slate-200 rounded px-2 py-1.5 outline-none focus:border-blue-500 w-36" />
+
   <div class="flex-1"></div>
-  <span id="row-count" class="text-slate-500 text-xs mono"></span>
+
+  <!-- Auto-refresh -->
+  <label class="flex items-center gap-1 text-xs text-slate-400 cursor-pointer">
+    <input id="chk-autorefresh" type="checkbox" class="accent-blue-500" onchange="toggleAutoRefresh()" />
+    Auto-refresh
+  </label>
+  <input id="autorefresh-interval" type="number" value="30" min="5" max="600"
+         class="bg-slate-800 border border-slate-700 text-xs text-slate-200 rounded px-2 py-1 w-14 outline-none"
+         onchange="toggleAutoRefresh()" />
+  <span class="text-slate-500 text-xs">s</span>
+
+  <span id="row-count" class="text-slate-500 text-xs mono ml-2"></span>
 </div>
 
-<!-- ═══════════════════ ACTION TOOLBAR ═══════════════════════════════════════ -->
+<!-- ═══ ACTION TOOLBAR ═══════════════════════════════════════════════════════ -->
 <div class="flex items-center gap-1.5 px-3 py-1.5 bg-slate-950 border-b border-slate-800 flex-shrink-0 flex-wrap">
-  <button class="act-btn" onclick="doDescribe()" id="btn-describe" disabled>📋 Describe</button>
-  <button class="act-btn primary" onclick="doLogs()" id="btn-logs" disabled>📜 Logs</button>
-  <button class="act-btn" onclick="doEvents()" id="btn-events" disabled>⚡ Events</button>
-  <button class="act-btn" onclick="doYaml()" id="btn-yaml" disabled>📄 YAML</button>
-  <button class="act-btn" onclick="doExec()" id="btn-exec" disabled>💻 Exec Shell</button>
-  <button class="act-btn" onclick="doRestart()" id="btn-restart" disabled>↺ Restart</button>
-  <button class="act-btn" onclick="doScale()" id="btn-scale" disabled>⚖ Scale</button>
-  <button class="act-btn danger" onclick="doDelete()" id="btn-delete" disabled>🗑 Delete</button>
+  <button class="act-btn" onclick="doDescribe()"     id="btn-describe"  disabled>📋 Describe</button>
+  <button class="act-btn primary" onclick="doLogs()" id="btn-logs"      disabled>📜 Logs</button>
+  <button class="act-btn" onclick="doEvents()"       id="btn-events"    disabled>⚡ Events</button>
+  <button class="act-btn" onclick="doYaml()"         id="btn-yaml"      disabled>📄 YAML</button>
+  <button class="act-btn" onclick="doTerminal()"     id="btn-terminal"  disabled>🖥 Terminal</button>
+  <button class="act-btn" onclick="doExec()"         id="btn-exec"      disabled>📋 Exec cmd</button>
+  <button class="act-btn" onclick="doRestart()"      id="btn-restart"   disabled>↺ Restart</button>
+  <button class="act-btn" onclick="doScale()"        id="btn-scale"     disabled>⚖ Scale</button>
+  <button class="act-btn" onclick="doRollout()"      id="btn-rollout"   disabled>🔄 Rollout</button>
+  <button class="act-btn" onclick="doEditData()"     id="btn-edit"      disabled>✏ Edit Data</button>
+  <button class="act-btn danger" onclick="doDelete()" id="btn-delete"   disabled>🗑 Delete</button>
   <span id="sel-info" class="text-slate-500 text-xs ml-2"></span>
 </div>
 
-<!-- ═══════════════════ MAIN CONTENT AREA ════════════════════════════════════ -->
+<!-- ═══ MAIN CONTENT AREA ════════════════════════════════════════════════════ -->
 <div class="flex flex-col flex-1 overflow-hidden" id="main-area">
 
-  <!-- Resource table (flex-1, scrollable) -->
+  <!-- Resource table -->
   <div class="flex-1 overflow-auto bg-slate-950" id="table-wrapper" style="min-height:120px">
     <table class="res-table w-full border-collapse" id="res-table">
       <thead id="res-thead"><tr></tr></thead>
@@ -339,22 +377,25 @@
 
   <!-- Output panel -->
   <div class="flex flex-col bg-slate-900 border-t border-slate-800 flex-shrink-0"
-       id="output-panel" style="height:260px">
+       id="output-panel" style="height:280px">
 
     <!-- Tabs -->
-    <div class="flex items-center gap-0 border-b border-slate-800 px-3 bg-slate-900 flex-shrink-0">
-      <button class="tab-btn active" onclick="switchTab('output')"  id="tab-output">Output</button>
-      <button class="tab-btn"        onclick="switchTab('logs')"    id="tab-logs">Live Logs</button>
-      <button class="tab-btn"        onclick="switchTab('custom')"  id="tab-custom">Custom</button>
-      <button class="tab-btn"        onclick="switchTab('yaml')"    id="tab-yaml">YAML</button>
+    <div class="flex items-center gap-0 border-b border-slate-800 px-2 bg-slate-900 flex-shrink-0 overflow-x-auto">
+      <button class="tab-btn active" onclick="switchTab('output')"      id="tab-output">Output</button>
+      <button class="tab-btn"        onclick="switchTab('logs')"        id="tab-logs">Live Logs</button>
+      <button class="tab-btn"        onclick="switchTab('custom')"      id="tab-custom">Custom</button>
+      <button class="tab-btn"        onclick="switchTab('yaml')"        id="tab-yaml">YAML</button>
+      <button class="tab-btn"        onclick="switchTab('portforward')" id="tab-portforward">⇆ Port Fwd</button>
+      <button class="tab-btn"        onclick="switchTab('health');loadHealth()" id="tab-health">💚 Health</button>
+      <button class="tab-btn"        onclick="switchTab('topology');loadTopology()" id="tab-topology">🗂 Topology</button>
       <div class="flex-1"></div>
-      <button onclick="clearOutput()" class="text-slate-600 hover:text-slate-300 text-xs px-2">Clear</button>
+      <button onclick="clearOutput()" class="text-slate-600 hover:text-slate-300 text-xs px-2 flex-shrink-0">Clear</button>
     </div>
 
-    <!-- Output -->
+    <!-- Output pane -->
     <div id="pane-output" class="terminal flex-1 overflow-auto"></div>
 
-    <!-- Live Logs -->
+    <!-- Live Logs pane -->
     <div id="pane-logs" class="hidden flex flex-col flex-1 overflow-hidden">
       <div class="flex items-center gap-2 px-3 py-2 border-b border-slate-800 flex-shrink-0 flex-wrap">
         <span class="text-slate-400 text-xs">Pod</span>
@@ -369,6 +410,9 @@
         <label class="flex items-center gap-1 text-xs text-slate-400">
           <input id="chk-prev" type="checkbox" class="accent-blue-500" /> Previous
         </label>
+        <label class="flex items-center gap-1 text-xs text-slate-400">
+          <input id="chk-autoreconnect" type="checkbox" class="accent-blue-500" checked /> Auto-reconnect
+        </label>
         <button onclick="startLogs()" id="btn-start-log"
                 class="px-3 py-1 rounded bg-green-800 hover:bg-green-700 text-white text-xs font-bold transition">
           ▶ Start
@@ -377,14 +421,19 @@
                 class="px-3 py-1 rounded bg-red-800 hover:bg-red-700 text-white text-xs font-bold transition">
           ■ Stop
         </button>
+        <button onclick="downloadLogs()" class="act-btn text-xs">⬇ Download</button>
         <button onclick="clearLogs()" class="text-slate-600 hover:text-slate-300 text-xs ml-1">Clear</button>
       </div>
       <div id="log-output" class="terminal flex-1 overflow-auto"></div>
     </div>
 
-    <!-- Custom -->
+    <!-- Custom command pane -->
     <div id="pane-custom" class="hidden flex flex-col flex-1 overflow-hidden">
       <div class="flex gap-2 px-3 py-2 border-b border-slate-800 flex-shrink-0">
+        <select id="cmd-history" onchange="pickHistory()"
+                class="bg-slate-800 border border-slate-700 text-xs text-slate-500 rounded px-2 py-1.5 outline-none w-36">
+          <option value="">History…</option>
+        </select>
         <input id="custom-cmd" type="text" value="kubectl "
                class="flex-1 bg-slate-950 border border-slate-700 text-sm text-slate-200 mono rounded px-3 py-1.5 focus:border-blue-500 outline-none"
                placeholder="kubectl get pods -n default"
@@ -394,13 +443,12 @@
           Run
         </button>
       </div>
-      <!-- Quick commands -->
       <div class="flex flex-wrap gap-1.5 px-3 py-2 border-b border-slate-800 flex-shrink-0">
         <button class="act-btn text-xs" onclick="quickCmd('kubectl get nodes -o wide')">Get nodes</button>
         <button class="act-btn text-xs" onclick="quickCmd('kubectl cluster-info')">Cluster info</button>
         <button class="act-btn text-xs" onclick="quickCmd('kubectl top nodes')">Top nodes</button>
+        <button class="act-btn text-xs" onclick="quickCmd('kubectl top pods -n ' + S.namespace)">Top pods</button>
         <button class="act-btn text-xs" onclick="quickCmd('kubectl config get-contexts')">Contexts</button>
-        <button class="act-btn text-xs" onclick="quickCmd('kubectl config current-context')">Current ctx</button>
         <button class="act-btn text-xs" onclick="quickCmd('kubectl api-resources')">API resources</button>
         <button class="act-btn text-xs" onclick="quickCmd('kubectl get namespaces')">Namespaces</button>
         <button class="act-btn text-xs" onclick="quickCmd('kubectl version --short')">Version</button>
@@ -408,28 +456,95 @@
       <div id="custom-output" class="terminal flex-1 overflow-auto"></div>
     </div>
 
-    <!-- YAML -->
+    <!-- YAML pane -->
     <div id="pane-yaml" class="hidden flex flex-col flex-1 overflow-hidden">
-      <div class="flex gap-2 px-3 py-2 border-b border-slate-800 flex-shrink-0">
+      <div class="flex gap-2 px-3 py-2 border-b border-slate-800 flex-shrink-0 flex-wrap">
         <button onclick="doYaml()" class="act-btn text-xs">Get YAML (selected)</button>
         <button onclick="copyYaml()" class="act-btn text-xs">📋 Copy</button>
+        <button onclick="toggleYamlEdit()" id="btn-yaml-edit" class="act-btn text-xs">✏ Edit</button>
+        <button onclick="applyYaml()" id="btn-yaml-apply" class="act-btn success text-xs hidden">✔ Apply</button>
+        <button onclick="cancelYamlEdit()" id="btn-yaml-cancel" class="act-btn text-xs hidden">✕ Cancel</button>
         <button onclick="clearYaml()" class="text-slate-600 hover:text-slate-300 text-xs ml-auto">Clear</button>
       </div>
+      <!-- Read-only display -->
       <div id="yaml-output" class="terminal flex-1 overflow-auto" style="color:#c084fc"></div>
+      <!-- Edit textarea (hidden by default) -->
+      <textarea id="yaml-edit"
+                class="hidden flex-1 bg-slate-950 text-purple-300 mono text-xs p-3 outline-none resize-none border-0"
+                style="font-size:12.5px; line-height:1.6; overflow-y:auto;"
+                spellcheck="false"></textarea>
     </div>
-  </div>
-</div>
 
-<!-- ═══════════════════ CONTEXT MENU ════════════════════════════════════════ -->
+    <!-- Port Forward pane -->
+    <div id="pane-portforward" class="hidden flex flex-col flex-1 overflow-hidden">
+      <div class="flex items-center gap-2 px-3 py-2 border-b border-slate-800 flex-shrink-0 flex-wrap">
+        <span class="text-slate-400 text-xs font-medium">New forward:</span>
+        <input id="pf-target" type="text" placeholder="pod/my-pod or svc/my-svc"
+               class="bg-slate-800 border border-slate-700 text-xs text-slate-200 rounded px-2 py-1.5 outline-none w-44" />
+        <input id="pf-local" type="number" placeholder="Local port"
+               class="bg-slate-800 border border-slate-700 text-xs text-slate-200 rounded px-2 py-1.5 outline-none w-24" />
+        <span class="text-slate-500 text-xs">→</span>
+        <input id="pf-remote" type="number" placeholder="Remote port"
+               class="bg-slate-800 border border-slate-700 text-xs text-slate-200 rounded px-2 py-1.5 outline-none w-24" />
+        <button onclick="startPortForward()"
+                class="px-3 py-1.5 rounded bg-green-800 hover:bg-green-700 text-white text-xs font-bold transition">
+          ▶ Start
+        </button>
+        <button onclick="loadPortForwards()" class="act-btn text-xs">⟳ Refresh</button>
+      </div>
+      <div class="flex-1 overflow-auto p-3">
+        <table class="pf-table w-full border-collapse">
+          <thead>
+            <tr>
+              <th>Target</th><th>Namespace</th><th>Local Port</th>
+              <th>Remote Port</th><th>Action</th>
+            </tr>
+          </thead>
+          <tbody id="pf-tbody">
+            <tr><td colspan="5" class="text-center text-slate-600 py-8">No active port forwards.</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- Health pane -->
+    <div id="pane-health" class="hidden flex flex-col flex-1 overflow-hidden">
+      <div class="flex items-center gap-2 px-3 py-2 border-b border-slate-800 flex-shrink-0">
+        <span class="text-slate-400 text-xs font-medium">Namespace Health Overview</span>
+        <button onclick="loadHealth()" class="act-btn text-xs ml-2">⟳ Refresh</button>
+        <span id="health-ts" class="text-slate-600 text-xs ml-auto"></span>
+      </div>
+      <div class="flex-1 overflow-auto p-3">
+        <div id="health-cards" class="flex gap-3 mb-4 flex-wrap"></div>
+        <div id="health-alerts"></div>
+      </div>
+    </div>
+
+    <!-- Topology pane -->
+    <div id="pane-topology" class="hidden flex flex-col flex-1 overflow-hidden">
+      <div class="flex items-center gap-2 px-3 py-2 border-b border-slate-800 flex-shrink-0">
+        <span class="text-slate-400 text-xs font-medium">Resource Topology (Deployments → Pods)</span>
+        <button onclick="loadTopology()" class="act-btn text-xs ml-2">⟳ Refresh</button>
+      </div>
+      <div id="topology-content" class="flex-1 overflow-auto p-3"></div>
+    </div>
+
+  </div><!-- /output-panel -->
+</div><!-- /main-area -->
+
+<!-- ═══ CONTEXT MENU ════════════════════════════════════════════════════════ -->
 <div id="ctx-menu" class="hidden">
   <div class="ctx-item" onclick="doDescribe()">📋 Describe</div>
   <div class="ctx-item" onclick="doLogs()">📜 Logs</div>
   <div class="ctx-item" onclick="doEvents()">⚡ Events</div>
   <div class="ctx-item" onclick="doYaml()">📄 Get YAML</div>
   <div class="ctx-sep"></div>
-  <div class="ctx-item" onclick="doExec()">💻 Exec Shell</div>
+  <div class="ctx-item" onclick="doTerminal()">🖥 Terminal</div>
+  <div class="ctx-item" onclick="doExec()">📋 Exec (copy cmd)</div>
   <div class="ctx-item" onclick="doRestart()">↺ Restart</div>
   <div class="ctx-item" onclick="doScale()">⚖ Scale</div>
+  <div class="ctx-item" onclick="doRollout()">🔄 Rollout History</div>
+  <div class="ctx-item" onclick="doEditData()">✏ Edit Data</div>
   <div class="ctx-sep"></div>
   <div class="ctx-item" onclick="doDelete()" style="color:#f87171">🗑 Delete</div>
   <div class="ctx-item" onclick="copyName()">📋 Copy name</div>
@@ -438,8 +553,8 @@
 <!-- Toast container -->
 <div id="toast-container"></div>
 
-<!-- ═══════════════════ SCALE MODAL ══════════════════════════════════════════ -->
-<div id="scale-modal" class="hidden fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-70">
+<!-- ═══ SCALE MODAL ════════════════════════════════════════════════════════════ -->
+<div id="scale-modal" class="modal-overlay">
   <div class="bg-slate-900 border border-slate-700 rounded-xl p-6 w-72 shadow-2xl">
     <h3 class="font-bold text-slate-200 mb-4">Scale Resource</h3>
     <label class="login-label">Replicas</label>
@@ -458,23 +573,116 @@
   </div>
 </div>
 
+<!-- ═══ ROLLOUT MODAL ══════════════════════════════════════════════════════════ -->
+<div id="rollout-modal" class="modal-overlay">
+  <div class="bg-slate-900 border border-slate-700 rounded-xl p-6 w-[540px] max-w-full shadow-2xl">
+    <h3 class="font-bold text-slate-200 mb-1">Rollout History</h3>
+    <p id="rollout-resource-label" class="text-slate-500 text-xs mb-3"></p>
+    <div id="rollout-output"
+         class="terminal mb-4 rounded" style="height:200px;overflow-y:auto"></div>
+    <div class="flex gap-2 items-center mb-4">
+      <label class="login-label mb-0 whitespace-nowrap">Rollback to revision</label>
+      <input id="rollout-revision" type="number" min="0" placeholder="(blank = previous)"
+             class="bg-slate-950 border border-slate-700 text-slate-200 rounded px-3 py-1.5 text-sm outline-none w-36" />
+      <button onclick="confirmRollback()"
+              class="px-4 py-1.5 rounded bg-amber-700 hover:bg-amber-600 text-white text-xs font-bold transition">
+        ↩ Rollback
+      </button>
+    </div>
+    <div class="flex justify-end">
+      <button onclick="closeModal('rollout-modal')"
+              class="px-4 py-2 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 text-sm transition">
+        Close
+      </button>
+    </div>
+  </div>
+</div>
+
+<!-- ═══ EDITOR MODAL ══════════════════════════════════════════════════════════ -->
+<div id="editor-modal" class="modal-overlay">
+  <div class="bg-slate-900 border border-slate-700 rounded-xl p-6 w-[620px] max-w-full shadow-2xl flex flex-col"
+       style="max-height:90vh">
+    <h3 class="font-bold text-slate-200 mb-1">Edit Data</h3>
+    <p id="editor-resource-label" class="text-slate-500 text-xs mb-3"></p>
+    <div id="editor-rows" class="overflow-y-auto flex-1 mb-4 pr-1"></div>
+    <div class="flex gap-2 items-center mb-4">
+      <button onclick="editorAddKey()"
+              class="act-btn text-xs">＋ Add key</button>
+    </div>
+    <div id="editor-err" class="text-red-400 text-xs mb-2 hidden"></div>
+    <div class="flex gap-2">
+      <button onclick="saveEditor()"
+              class="flex-1 py-2 rounded bg-blue-700 hover:bg-blue-600 text-white text-sm font-bold transition">
+        💾 Save
+      </button>
+      <button onclick="closeModal('editor-modal')"
+              class="flex-1 py-2 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 text-sm transition">
+        Cancel
+      </button>
+    </div>
+  </div>
+</div>
+
+<!-- ═══ TERMINAL MODAL ════════════════════════════════════════════════════════ -->
+<div id="terminal-modal" class="modal-overlay">
+  <div class="bg-slate-900 border border-slate-700 rounded-xl shadow-2xl flex flex-col"
+       style="width:720px;max-width:95vw;max-height:90vh">
+    <div class="flex items-center gap-3 px-4 py-3 border-b border-slate-700">
+      <span class="font-bold text-slate-200 text-sm">🖥 Pod Terminal</span>
+      <span id="term-pod-label" class="text-amber-400 text-xs mono"></span>
+      <select id="term-container"
+              class="bg-slate-800 border border-slate-700 text-xs text-slate-200 rounded px-2 py-1 outline-none ml-2">
+        <option value="">— container —</option>
+      </select>
+      <div class="flex-1"></div>
+      <button onclick="clearTerminal()" class="text-slate-500 hover:text-slate-300 text-xs">Clear</button>
+      <button onclick="closeModal('terminal-modal')"
+              class="text-slate-500 hover:text-red-400 text-lg ml-2 leading-none">✕</button>
+    </div>
+    <div id="xterm-container" class="flex-1 overflow-hidden" style="height:380px;min-height:200px"></div>
+    <div class="flex gap-2 px-3 py-2 border-t border-slate-700">
+      <span class="text-green-400 text-xs mono self-center">$</span>
+      <input id="term-cmd-input" type="text"
+             class="flex-1 bg-slate-950 border border-slate-700 text-sm text-slate-200 mono rounded px-3 py-1.5 focus:border-blue-500 outline-none"
+             placeholder="Enter command…" autocomplete="off" autocorrect="off" spellcheck="false" />
+      <button onclick="termExec()"
+              class="px-4 py-1.5 rounded bg-green-800 hover:bg-green-700 text-white text-xs font-bold transition">
+        Run
+      </button>
+    </div>
+  </div>
+</div>
+
 <!-- ═══════════════════ JAVASCRIPT ═══════════════════════════════════════════ -->
 <script>
 // ── State ─────────────────────────────────────────────────────────────────────
 const S = {
-  activeEnv:   '',
-  namespace:   'default',
-  resource:    'pods',
-  allNs:       false,
-  rows:        [],
-  headers:     [],
-  selected:    new Set(),   // indices
-  sortCol:     -1,
-  sortDir:     1,
-  logSource:   null,
-  sessionTimer: null,
-  pinnedNs:    [],
+  activeEnv:      '',
+  namespace:      'default',
+  resource:       'pods',
+  allNs:          false,
+  rows:           [],
+  headers:        [],
+  filteredRows:   [],
+  selected:       new Set(),
+  sortCol:        -1,
+  sortDir:        1,
+  logSource:      null,
+  sessionTimer:   null,
+  pinnedNs:       [],
+  lastAlertCount: 0,
+  lastAlerts:     [],
+  autoRefreshTimer: null,
+  termPod:        '',
+  termNs:         '',
+  yamlEditMode:   false,
 };
+
+// ── xterm ──────────────────────────────────────────────────────────────────────
+let _xterm        = null;
+let _xtermFit     = null;
+let _xtermHistory = [];
+let _xtermHistIdx = -1;
 
 // ── Startup ───────────────────────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', async () => {
@@ -485,6 +693,9 @@ document.addEventListener('DOMContentLoaded', async () => {
   document.addEventListener('click', () => hideCtxMenu());
   await loadEnvList();
   startSessionPoll();
+  loadContexts();
+  renderHistoryList();
+  setInterval(pollAlerts, 60000);
 });
 
 // ── Config / environments ─────────────────────────────────────────────────────
@@ -505,30 +716,27 @@ async function loadEnvList() {
 }
 
 function loadEnv(envData) {
-  const sel = document.getElementById('env-select');
+  const sel  = document.getElementById('env-select');
   const name = sel.value;
   if (!name) return;
-  const r = envData || null;
-  // Need the data — re-fetch if not passed
-  if (!r) {
+  if (!envData) {
     fetch('/api/config').then(x => x.json()).then(d => {
       const env = d.environments[name];
-      if (!env) return;
-      _fillLogin(name, env);
+      if (env) _fillLogin(name, env);
     });
     return;
   }
-  _fillLogin(name, r);
+  _fillLogin(name, envData);
 }
 
 function _fillLogin(name, env) {
   S.activeEnv = name;
   S.pinnedNs  = env.pinned_namespaces || [];
-  document.getElementById('f-ske').value    = env.ske_url     || '';
-  document.getElementById('f-auth').value   = env.auth_url    || '';
-  document.getElementById('f-user').value   = env.username    || '';
-  document.getElementById('f-pass').value   = env.password    || '';
-  document.getElementById('f-skectl').value = env.skectl_path || '';
+  document.getElementById('f-ske').value     = env.ske_url     || '';
+  document.getElementById('f-auth').value    = env.auth_url    || '';
+  document.getElementById('f-user').value    = env.username    || '';
+  document.getElementById('f-pass').value    = env.password    || '';
+  document.getElementById('f-skectl').value  = env.skectl_path || '';
   document.getElementById('f-env-name').value = name;
 }
 
@@ -548,11 +756,11 @@ async function doLogin() {
   err.classList.add('hidden');
 
   const payload = {
-    ske_url:      document.getElementById('f-ske').value.trim(),
-    auth_url:     document.getElementById('f-auth').value.trim(),
-    username:     document.getElementById('f-user').value.trim(),
-    password:     document.getElementById('f-pass').value,
-    skectl_path:  document.getElementById('f-skectl').value.trim(),
+    ske_url:     document.getElementById('f-ske').value.trim(),
+    auth_url:    document.getElementById('f-auth').value.trim(),
+    username:    document.getElementById('f-user').value.trim(),
+    password:    document.getElementById('f-pass').value,
+    skectl_path: document.getElementById('f-skectl').value.trim(),
   };
 
   const r = await fetch('/api/login', {
@@ -568,34 +776,32 @@ async function doLogin() {
     return;
   }
 
-  // Optionally save environment
   if (document.getElementById('chk-save').checked) {
     const envName = document.getElementById('f-env-name').value.trim()
-                 || document.getElementById('env-select').value
-                 || 'default';
+                 || document.getElementById('env-select').value || 'default';
     await fetch('/api/config', {
       method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({
-        name: envName,
-        ...payload,
-        pinned_namespaces: S.pinnedNs,
-      })
+      body: JSON.stringify({name: envName, ...payload, pinned_namespaces: S.pinnedNs})
     });
     S.activeEnv = envName;
     await loadEnvList();
   }
 
   document.getElementById('login-overlay').classList.add('hidden');
+  await loadContexts();
   await reloadNs();
   refresh();
   startSessionPoll();
+  pollAlerts();
 }
 
 function doLogout() {
   S.logSource && S.logSource.close();
+  toggleAutoRefresh(false);
   document.getElementById('login-overlay').classList.remove('hidden');
-  document.getElementById('nav-ctx').textContent = '—';
+  document.getElementById('ctx-switcher').innerHTML = '<option class="bg-slate-800">—</option>';
   document.getElementById('session-timer').textContent = '—';
+  document.getElementById('alert-badge').classList.add('hidden');
 }
 
 // ── Session timer ─────────────────────────────────────────────────────────────
@@ -609,7 +815,7 @@ async function pollSession() {
   try {
     const r = await fetch('/api/session');
     const d = await r.json();
-    document.getElementById('nav-ctx').textContent = d.context || '—';
+    document.getElementById('ctx-switcher').title = d.context || '—';
     const el = document.getElementById('session-timer');
     if (d.remaining === null) {
       el.textContent = d.healthy ? 'active' : 'EXPIRED';
@@ -617,12 +823,10 @@ async function pollSession() {
     } else {
       el.textContent = fmtCountdown(d.remaining);
       el.className   = 'mono text-xs font-bold ' + sessionClass(d.remaining);
-      if (d.remaining <= 300 && d.remaining > 270) {
+      if (d.remaining <= 300 && d.remaining > 270)
         toast('⚠ Session expiring', `Expires in ${fmtCountdown(d.remaining)}`, 'warn');
-      }
-      if (d.remaining <= 0) {
+      if (d.remaining <= 0)
         toast('✖ Session expired', 'Please renew or log in again.', 'error', 0);
-      }
     }
   } catch(_) {}
 }
@@ -649,16 +853,46 @@ async function doRenew() {
   if (d.ok) pollSession();
 }
 
-// ── Namespaces ─────────────────────────────────────────────────────────────────
+// ── Contexts ──────────────────────────────────────────────────────────────────
+async function loadContexts() {
+  try {
+    const r = await fetch('/api/contexts');
+    const d = await r.json();
+    const sel = document.getElementById('ctx-switcher');
+    sel.innerHTML = d.contexts.map(c =>
+      `<option value="${escHtml(c)}" class="bg-slate-800" ${c === d.current ? 'selected' : ''}>${escHtml(c)}</option>`
+    ).join('') || '<option class="bg-slate-800">—</option>';
+  } catch(_) {}
+}
+
+async function switchCtx() {
+  const ctx = document.getElementById('ctx-switcher').value;
+  if (!ctx || ctx === '—') return;
+  const r = await fetch('/api/contexts/switch', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({context: ctx})
+  });
+  const d = await r.json();
+  if (d.ok) {
+    toast('Context switched', ctx, 'ok');
+    pollSession();
+    reloadNs();
+    refresh();
+  } else {
+    toast('Switch failed', d.output || '', 'error');
+  }
+}
+
+// ── Namespaces ────────────────────────────────────────────────────────────────
 async function reloadNs() {
   const r = await fetch('/api/namespaces');
   const d = await r.json();
   if (!d.ok) { toast('Error', d.error, 'error'); return; }
-  const pinned   = S.pinnedNs;
-  const all      = [...pinned, ...d.namespaces.filter(n => !pinned.includes(n))];
-  const sel      = document.getElementById('ns-select');
-  const current  = sel.value || S.namespace;
-  sel.innerHTML  = '';
+  const pinned  = S.pinnedNs;
+  const all     = [...pinned, ...d.namespaces.filter(n => !pinned.includes(n))];
+  const sel     = document.getElementById('ns-select');
+  const current = sel.value || S.namespace;
+  sel.innerHTML = '';
   all.forEach(ns => {
     const o = document.createElement('option');
     o.value = ns;
@@ -684,7 +918,6 @@ async function addNs() {
       body: JSON.stringify({namespace: ns})
     });
   } else {
-    // No named env — persist under __default__
     await fetch('/api/config', {
       method:'POST', headers:{'Content-Type':'application/json'},
       body: JSON.stringify({name:'__default__', pinned_namespaces: S.pinnedNs,
@@ -700,50 +933,58 @@ async function addNs() {
 async function removeNs() {
   const ns = document.getElementById('ns-select').value;
   if (!S.pinnedNs.includes(ns)) {
-    toast('Not pinned', `"${ns}" is a cluster namespace — only pinned namespaces can be removed.`, 'warn');
+    toast('Not pinned', `"${ns}" is a cluster namespace — only pinned ones can be removed.`, 'warn');
     return;
   }
   if (!confirm(`Remove "${ns}" from pinned list?`)) return;
   S.pinnedNs = S.pinnedNs.filter(n => n !== ns);
   if (S.activeEnv) {
-    await fetch(`/api/config/${encodeURIComponent(S.activeEnv)}/namespaces/${encodeURIComponent(ns)}`, {method:'DELETE'});
+    await fetch(`/api/config/${encodeURIComponent(S.activeEnv)}/namespaces/${encodeURIComponent(ns)}`,
+                {method:'DELETE'});
   }
   await reloadNs();
 }
 
 // ── Resource table ─────────────────────────────────────────────────────────────
 async function refresh() {
-  S.resource = document.getElementById('res-select').value;
+  S.resource  = document.getElementById('res-select').value;
   S.namespace = document.getElementById('ns-select').value;
   S.allNs     = document.getElementById('chk-allns').checked;
   S.selected.clear();
   updateActionBtns();
 
-  const params = new URLSearchParams({
-    type: S.resource, namespace: S.namespace, all: S.allNs
-  });
+  const params = new URLSearchParams({type: S.resource, namespace: S.namespace, all: S.allNs});
   const r = await fetch(`/api/resources?${params}`);
   const d = await r.json();
 
   appendOutput(`» ${d.command || ''}\n`, 'cmd');
-
   if (!d.ok) { appendOutput(d.error + '\n', 'err'); return; }
 
-  S.headers = d.headers;
-  S.rows    = d.rows;
-  renderTable();
-  document.getElementById('row-count').textContent =
-    `${d.rows.length} ${S.resource}`;
+  S.headers      = d.headers;
+  S.rows         = d.rows;
+  S.filteredRows = d.rows;
+  applyFilter();
+  document.getElementById('row-count').textContent = `${d.rows.length} ${S.resource}`;
 
   // Populate log pod selector
   if (S.resource === 'pods') {
     const logPod = document.getElementById('log-pod');
-    const cur = logPod.value;
+    const cur    = logPod.value;
     logPod.innerHTML = d.rows.map(r =>
-      `<option value="${r.cells[0]}">${r.cells[0]}</option>`).join('');
+      `<option value="${escHtml(r.cells[0])}">${escHtml(r.cells[0])}</option>`).join('');
     if (cur && d.rows.some(r => r.cells[0] === cur)) logPod.value = cur;
   }
 }
+
+function applyFilter() {
+  const q = (document.getElementById('search-input').value || '').toLowerCase();
+  S.filteredRows = q
+    ? S.rows.filter(row => row.cells.some(c => c.toLowerCase().includes(q)))
+    : S.rows;
+  renderTable();
+}
+
+function filterTable() { applyFilter(); }
 
 function renderTable() {
   const thead = document.getElementById('res-thead');
@@ -752,37 +993,39 @@ function renderTable() {
   thead.innerHTML = '<tr>' + S.headers.map((h, i) => {
     let cls = '';
     if (i === S.sortCol) cls = S.sortDir === 1 ? 'sorted-asc' : 'sorted-desc';
-    return `<th class="${cls}" onclick="sortBy(${i})">${h}</th>`;
+    return `<th class="${cls}" onclick="sortBy(${i})">${escHtml(h)}</th>`;
   }).join('') + '</tr>';
 
-  if (!S.rows.length) {
+  if (!S.filteredRows.length) {
     tbody.innerHTML = `<tr><td colspan="${Math.max(S.headers.length,1)}"
       class="py-12 text-center text-slate-600 text-sm">No ${S.resource} found.</td></tr>`;
     return;
   }
 
-  tbody.innerHTML = S.rows.map((row, i) => {
+  const idxMap = new Map(S.filteredRows.map((row, fi) => [fi, S.rows.indexOf(row)]));
+
+  tbody.innerHTML = S.filteredRows.map((row, fi) => {
+    const ri    = idxMap.get(fi);
     const cells = S.headers.map((_, ci) => row.cells[ci] || '');
-    const status = cells[1] || '';
-    const selClass = S.selected.has(i) ? 'selected' : '';
+    const selClass = S.selected.has(ri) ? 'selected' : '';
     const tds = cells.map((c, ci) => {
       const val = ci === 1 ? statusBadge(c) : escHtml(c);
       return `<td>${val}</td>`;
     }).join('');
-    return `<tr class="${selClass}" data-idx="${i}"
-               onclick="selectRow(event,${i})"
+    return `<tr class="${selClass}" data-ri="${ri}"
+               onclick="selectRow(event,${ri})"
                ondblclick="doDescribe()"
-               oncontextmenu="showCtxMenu(event,${i})">${tds}</tr>`;
+               oncontextmenu="showCtxMenu(event,${ri})">${tds}</tr>`;
   }).join('');
 }
 
 function statusBadge(s) {
   const up = s.toUpperCase();
   let cls = 'badge-gray';
-  if (/RUNNING|ACTIVE|BOUND|COMPLETE/.test(up))          cls = 'badge-green';
+  if (/RUNNING|ACTIVE|BOUND|COMPLET/.test(up))             cls = 'badge-green';
   else if (/ERROR|CRASHLOOP|OOMKILL|FAILED|BACKOFF/.test(up)) cls = 'badge-red';
-  else if (/PENDING|TERMINAT|UNKNOWN|INIT/.test(up))     cls = 'badge-yellow';
-  else if (/AVAILABLE/.test(up))                          cls = 'badge-blue';
+  else if (/PENDING|TERMINAT|UNKNOWN|INIT/.test(up))        cls = 'badge-yellow';
+  else if (/AVAILABLE/.test(up))                             cls = 'badge-blue';
   return `<span class="badge ${cls}">${escHtml(s)}</span>`;
 }
 
@@ -790,31 +1033,30 @@ function sortBy(col) {
   if (S.sortCol === col) S.sortDir *= -1;
   else { S.sortCol = col; S.sortDir = 1; }
   S.rows.sort((a, b) => {
-    const av = (a.cells[col] || ''), bv = (b.cells[col] || '');
+    const av = a.cells[col] || '', bv = b.cells[col] || '';
     return av.localeCompare(bv, undefined, {numeric:true}) * S.sortDir;
   });
-  renderTable();
+  applyFilter();
 }
 
-function selectRow(e, idx) {
+function selectRow(e, ri) {
   if (e.ctrlKey || e.metaKey) {
-    S.selected.has(idx) ? S.selected.delete(idx) : S.selected.add(idx);
+    S.selected.has(ri) ? S.selected.delete(ri) : S.selected.add(ri);
   } else if (e.shiftKey && S.selected.size > 0) {
     const last = Math.max(...S.selected);
-    const lo = Math.min(last, idx), hi = Math.max(last, idx);
+    const lo = Math.min(last, ri), hi = Math.max(last, ri);
     for (let i = lo; i <= hi; i++) S.selected.add(i);
   } else {
     S.selected.clear();
-    S.selected.add(idx);
+    S.selected.add(ri);
   }
   renderTable();
   updateActionBtns();
 
-  // When a pod is selected, update log pod selector
   if (S.resource === 'pods' && S.selected.size === 1) {
     const name = selectedNames()[0];
-    const logPod = document.getElementById('log-pod');
-    if (name) { logPod.value = name; onLogPodChange(); }
+    const lp   = document.getElementById('log-pod');
+    if (name) { lp.value = name; onLogPodChange(); }
   }
 }
 
@@ -824,18 +1066,17 @@ function selectedNames() {
 
 function updateActionBtns() {
   const n = S.selected.size;
-  ['btn-describe','btn-logs','btn-events','btn-yaml',
-   'btn-exec','btn-restart','btn-scale','btn-delete'].forEach(id => {
+  ['btn-describe','btn-logs','btn-events','btn-yaml','btn-terminal',
+   'btn-exec','btn-restart','btn-scale','btn-rollout','btn-edit','btn-delete'].forEach(id => {
     document.getElementById(id).disabled = (n === 0);
   });
-  document.getElementById('sel-info').textContent =
-    n > 0 ? `${n} selected` : '';
+  document.getElementById('sel-info').textContent = n > 0 ? `${n} selected` : '';
 }
 
 // ── Context menu ──────────────────────────────────────────────────────────────
-function showCtxMenu(e, idx) {
+function showCtxMenu(e, ri) {
   e.preventDefault();
-  if (!S.selected.has(idx)) { S.selected.clear(); S.selected.add(idx); renderTable(); updateActionBtns(); }
+  if (!S.selected.has(ri)) { S.selected.clear(); S.selected.add(ri); renderTable(); updateActionBtns(); }
   const m = document.getElementById('ctx-menu');
   m.style.left = e.clientX + 'px';
   m.style.top  = e.clientY + 'px';
@@ -862,9 +1103,9 @@ async function doYaml() {
   const p = new URLSearchParams({type: S.resource, name: names[0], namespace: S.namespace, all: S.allNs});
   const r = await fetch(`/api/yaml?${p}`);
   const d = await r.json();
-  const el = document.getElementById('yaml-output');
-  el.textContent = d.output;
-  el.scrollTop = 0;
+  cancelYamlEdit();
+  document.getElementById('yaml-output').textContent = d.output;
+  document.getElementById('yaml-output').scrollTop = 0;
 }
 
 async function doEvents() {
@@ -899,8 +1140,7 @@ async function doDelete() {
 
 async function doRestart() {
   const names = selectedNames(); if (!names.length) return;
-  const allowed = ['deployments','daemonsets','statefulsets'];
-  if (!allowed.includes(S.resource)) {
+  if (!['deployments','daemonsets','statefulsets'].includes(S.resource)) {
     toast('Not supported', 'Restart works for deployments, daemonsets, statefulsets.', 'warn'); return;
   }
   switchTab('output');
@@ -917,11 +1157,10 @@ async function doRestart() {
 
 function doScale() {
   const names = selectedNames(); if (!names.length) return;
-  const allowed = ['deployments','replicasets','statefulsets'];
-  if (!allowed.includes(S.resource)) {
+  if (!['deployments','replicasets','statefulsets'].includes(S.resource)) {
     toast('Not supported', 'Scale works for deployments, replicasets, statefulsets.', 'warn'); return;
   }
-  document.getElementById('scale-modal').classList.remove('hidden');
+  openModal('scale-modal');
 }
 
 async function confirmScale() {
@@ -945,7 +1184,6 @@ function doExec() {
   const name  = names[0];
   const ns    = S.namespace;
   const cmd   = `kubectl exec -it ${name} -n ${ns} -- /bin/bash`;
-  // Offer to copy the command since we can't open a terminal from a web page
   if (confirm(`Copy kubectl exec command to clipboard?\n\n${cmd}`)) {
     navigator.clipboard.writeText(cmd).then(
       () => toast('Copied', 'Paste into your terminal.', 'ok'),
@@ -960,6 +1198,170 @@ function copyName() {
     .then(() => toast('Copied', names.join(', '), 'ok'));
 }
 
+// ── Rollout ───────────────────────────────────────────────────────────────────
+async function doRollout() {
+  const names = selectedNames(); if (!names.length) return;
+  const allowed = ['deployments','daemonsets','statefulsets'];
+  if (!allowed.includes(S.resource)) {
+    toast('Not supported', 'Rollout works for deployments, daemonsets, statefulsets.', 'warn'); return;
+  }
+  const name = names[0];
+  document.getElementById('rollout-resource-label').textContent =
+    `${S.resource}/${name} in ${S.namespace}`;
+  document.getElementById('rollout-revision').value = '';
+  document.getElementById('rollout-output').textContent = 'Loading…';
+  openModal('rollout-modal');
+
+  const p = new URLSearchParams({type: S.resource, name, namespace: S.namespace});
+  const r = await fetch(`/api/rollout/history?${p}`);
+  const d = await r.json();
+  document.getElementById('rollout-output').textContent = d.output;
+}
+
+async function confirmRollback() {
+  const label    = document.getElementById('rollout-resource-label').textContent;
+  const revision = document.getElementById('rollout-revision').value.trim();
+  const parts    = label.split('/');
+  if (parts.length < 2) return;
+  const name     = parts[1].split(' ')[0];
+  if (!confirm(`Rollback ${S.resource}/${name}${revision ? ' to revision ' + revision : ' (to previous)'}?`)) return;
+  const r = await fetch('/api/rollout/undo', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({type: S.resource, name, namespace: S.namespace, revision})
+  });
+  const d = await r.json();
+  closeModal('rollout-modal');
+  switchTab('output');
+  appendOutput(`» ${d.command}\n`, 'cmd');
+  appendOutput(d.output + '\n', d.ok ? 'ok' : 'err');
+  toast(d.ok ? 'Rolled back' : 'Rollback failed', d.output.split('\n')[0], d.ok ? 'ok' : 'error');
+}
+
+// ── ConfigMap / Secret editor ─────────────────────────────────────────────────
+async function doEditData() {
+  const names = selectedNames(); if (!names.length) return;
+  const allowed = ['configmaps','secrets'];
+  if (!allowed.includes(S.resource)) {
+    toast('Not supported', 'Edit Data works for configmaps and secrets.', 'warn'); return;
+  }
+  const name = names[0];
+  document.getElementById('editor-resource-label').textContent =
+    `${S.resource}/${name} in ${S.namespace}`;
+  document.getElementById('editor-rows').innerHTML = '<p class="text-slate-500 text-xs">Loading…</p>';
+  document.getElementById('editor-err').classList.add('hidden');
+  openModal('editor-modal');
+
+  const p = new URLSearchParams({type: S.resource, name, namespace: S.namespace});
+  const r = await fetch(`/api/editor?${p}`);
+  const d = await r.json();
+  if (!d.ok) {
+    document.getElementById('editor-rows').innerHTML =
+      `<p class="text-red-400 text-xs">${escHtml(d.error)}</p>`;
+    return;
+  }
+  // Store metadata
+  document.getElementById('editor-modal').dataset.resType   = d.type;
+  document.getElementById('editor-modal').dataset.name      = d.name;
+  document.getElementById('editor-modal').dataset.namespace = d.namespace;
+  document.getElementById('editor-modal').dataset.isSecret  = d.is_secret ? '1' : '0';
+
+  renderEditorRows(d.data);
+}
+
+function renderEditorRows(data) {
+  const container = document.getElementById('editor-rows');
+  container.innerHTML = '';
+  for (const [k, v] of Object.entries(data)) {
+    container.appendChild(makeEditorRow(k, v));
+  }
+}
+
+function makeEditorRow(key, val) {
+  const row = document.createElement('div');
+  row.className = 'editor-row';
+  row.innerHTML = `
+    <input type="text" class="editor-key bg-slate-950 border border-slate-700 text-xs text-slate-200
+           rounded px-2 py-1.5 outline-none focus:border-blue-500" value="${escHtml(key)}" placeholder="key" />
+    <textarea rows="2" class="editor-val bg-slate-950 border border-slate-700 text-xs text-slate-200
+              rounded px-2 py-1.5 outline-none focus:border-blue-500 resize-y mono"
+              placeholder="value">${escHtml(val)}</textarea>
+    <button class="editor-del" onclick="this.closest('.editor-row').remove()">✕</button>`;
+  return row;
+}
+
+function editorAddKey() {
+  document.getElementById('editor-rows').appendChild(makeEditorRow('', ''));
+}
+
+async function saveEditor() {
+  const modal     = document.getElementById('editor-modal');
+  const resType   = modal.dataset.resType;
+  const name      = modal.dataset.name;
+  const namespace = modal.dataset.namespace;
+  const errEl     = document.getElementById('editor-err');
+  errEl.classList.add('hidden');
+
+  const data = {};
+  for (const row of document.querySelectorAll('#editor-rows .editor-row')) {
+    const key = row.querySelector('.editor-key').value.trim();
+    const val = row.querySelector('.editor-val').value;
+    if (key) data[key] = val;
+  }
+
+  const r = await fetch('/api/editor', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({type: resType, name, namespace, data})
+  });
+  const d = await r.json();
+  if (d.ok) {
+    closeModal('editor-modal');
+    toast('Saved', `${resType}/${name} updated.`, 'ok');
+  } else {
+    errEl.textContent = d.output || d.error || 'Save failed';
+    errEl.classList.remove('hidden');
+  }
+}
+
+// ── YAML apply/edit ───────────────────────────────────────────────────────────
+function toggleYamlEdit() {
+  if (S.yamlEditMode) {
+    cancelYamlEdit();
+  } else {
+    const current = document.getElementById('yaml-output').textContent;
+    document.getElementById('yaml-edit').value = current;
+    document.getElementById('yaml-output').classList.add('hidden');
+    document.getElementById('yaml-edit').classList.remove('hidden');
+    document.getElementById('btn-yaml-apply').classList.remove('hidden');
+    document.getElementById('btn-yaml-cancel').classList.remove('hidden');
+    document.getElementById('btn-yaml-edit').textContent = '↩ View';
+    S.yamlEditMode = true;
+  }
+}
+
+function cancelYamlEdit() {
+  document.getElementById('yaml-edit').classList.add('hidden');
+  document.getElementById('yaml-output').classList.remove('hidden');
+  document.getElementById('btn-yaml-apply').classList.add('hidden');
+  document.getElementById('btn-yaml-cancel').classList.add('hidden');
+  document.getElementById('btn-yaml-edit').textContent = '✏ Edit';
+  S.yamlEditMode = false;
+}
+
+async function applyYaml() {
+  const yaml = document.getElementById('yaml-edit').value.trim();
+  if (!yaml) { toast('Empty', 'Nothing to apply.', 'warn'); return; }
+  const r = await fetch('/api/apply', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({yaml})
+  });
+  const d = await r.json();
+  cancelYamlEdit();
+  switchTab('output');
+  appendOutput(`» ${d.command}\n`, 'cmd');
+  appendOutput(d.output + '\n', d.ok ? 'ok' : 'err');
+  toast(d.ok ? 'Applied' : 'Apply failed', d.output.split('\n')[0].slice(0, 80), d.ok ? 'ok' : 'error');
+}
+
 // ── Live Logs ─────────────────────────────────────────────────────────────────
 async function onLogPodChange() {
   const pod = document.getElementById('log-pod').value;
@@ -969,7 +1371,7 @@ async function onLogPodChange() {
   const d = await r.json();
   const sel = document.getElementById('log-cnt');
   sel.innerHTML = '<option value="">— all —</option>' +
-    (d.containers || []).map(c => `<option>${c}</option>`).join('');
+    (d.containers || []).map(c => `<option>${escHtml(c)}</option>`).join('');
 }
 
 function doLogs() {
@@ -992,18 +1394,32 @@ function startLogs() {
   if (!pod) { toast('No pod', 'Select a pod first.', 'warn'); return; }
 
   const out = document.getElementById('log-output');
-  out.innerHTML += `<span class="t-info">═══ ${pod}${cnt?' ['+cnt+']':''} tail=${tail} ═══\n</span>`;
+  out.innerHTML += `<span class="t-info">═══ ${escHtml(pod)}${cnt?' ['+escHtml(cnt)+']':''} tail=${tail} ═══\n</span>`;
 
   const params = new URLSearchParams({pod, namespace:ns, container:cnt, tail, previous:prev});
   S.logSource = new EventSource(`/api/logs/stream?${params}`);
 
   S.logSource.onmessage = e => {
-    const msg  = JSON.parse(e.data);
+    const msg = JSON.parse(e.data);
     if (msg.type === 'cmd')  { appendLogLine(`» ${msg.text}`, 'cmd'); return; }
-    if (msg.type === 'done') { appendLogLine('[stream ended]', 'dim'); S.logSource.close(); return; }
+    if (msg.type === 'done') {
+      appendLogLine('[stream ended]', 'dim');
+      S.logSource.close();
+      if (document.getElementById('chk-autoreconnect').checked) {
+        appendLogLine('[auto-reconnecting in 5s…]', 'dim');
+        setTimeout(startLogs, 5000);
+      }
+      return;
+    }
     appendLogLine(msg.text);
   };
-  S.logSource.onerror = () => { appendLogLine('[stream error / disconnected]', 'err'); };
+  S.logSource.onerror = () => {
+    appendLogLine('[stream error / disconnected]', 'err');
+    if (document.getElementById('chk-autoreconnect').checked) {
+      appendLogLine('[reconnecting in 5s…]', 'dim');
+      setTimeout(startLogs, 5000);
+    }
+  };
 }
 
 function stopLogs() {
@@ -1013,10 +1429,10 @@ function stopLogs() {
 }
 
 function appendLogLine(text, forceTag) {
-  const el  = document.getElementById('log-output');
-  const tag = forceTag || logTag(text);
+  const el   = document.getElementById('log-output');
+  const tag  = forceTag || logTag(text);
   const span = document.createElement('span');
-  span.className = tag ? `log-${tag}` : '';
+  span.className  = tag ? `log-${tag}` : '';
   span.textContent = text + '\n';
   el.appendChild(span);
   el.scrollTop = el.scrollHeight;
@@ -1025,17 +1441,30 @@ function appendLogLine(text, forceTag) {
 function logTag(line) {
   const l = line.toLowerCase();
   if (/error|exception|fatal|panic/.test(l)) return 'error';
-  if (/warn/.test(l))  return 'warn';
-  if (/\binfo\b|\bdebug\b/.test(l)) return 'info';
+  if (/warn/.test(l))                         return 'warn';
+  if (/\binfo\b|\bdebug\b/.test(l))           return 'info';
   return '';
 }
 
 function clearLogs() { document.getElementById('log-output').innerHTML = ''; }
 
+function downloadLogs() {
+  const text = document.getElementById('log-output').innerText;
+  const pod  = document.getElementById('log-pod').value || 'pod';
+  const ts   = new Date().toISOString().slice(0, 19).replace(/:/g, '-');
+  const blob = new Blob([text], {type: 'text/plain'});
+  const a    = document.createElement('a');
+  a.href     = URL.createObjectURL(blob);
+  a.download = `${pod}-logs-${ts}.txt`;
+  a.click();
+  URL.revokeObjectURL(a.href);
+}
+
 // ── Custom command ─────────────────────────────────────────────────────────────
 async function runCustom() {
   const cmd = document.getElementById('custom-cmd').value.trim();
   if (!cmd) return;
+  addToHistory(cmd);
   switchTab('custom');
   const el = document.getElementById('custom-output');
   el.innerHTML += `<span class="t-cmd">» ${escHtml(cmd)}\n</span>`;
@@ -1045,7 +1474,7 @@ async function runCustom() {
   });
   const d = await r.json();
   const span = document.createElement('span');
-  span.className = d.ok ? 't-ok' : 't-err';
+  span.className   = d.ok ? 't-ok' : 't-err';
   span.textContent = d.output + '\n';
   el.appendChild(span);
   el.scrollTop = el.scrollHeight;
@@ -1056,54 +1485,373 @@ function quickCmd(cmd) {
   runCustom();
 }
 
+function addToHistory(cmd) {
+  let hist = JSON.parse(localStorage.getItem('ske_cmd_history') || '[]');
+  hist = [cmd, ...hist.filter(c => c !== cmd)].slice(0, 20);
+  localStorage.setItem('ske_cmd_history', JSON.stringify(hist));
+  renderHistoryList();
+}
+
+function renderHistoryList() {
+  const hist = JSON.parse(localStorage.getItem('ske_cmd_history') || '[]');
+  const sel  = document.getElementById('cmd-history');
+  sel.innerHTML = '<option value="">History…</option>' +
+    hist.map(c => `<option value="${escHtml(c)}">${escHtml(c.length > 55 ? c.slice(0,55)+'…' : c)}</option>`).join('');
+}
+
+function pickHistory() {
+  const val = document.getElementById('cmd-history').value;
+  if (val) {
+    document.getElementById('custom-cmd').value = val;
+    document.getElementById('custom-cmd').focus();
+    document.getElementById('cmd-history').value = '';
+  }
+}
+
+// ── Port Forwarding ───────────────────────────────────────────────────────────
+async function startPortForward() {
+  const target = document.getElementById('pf-target').value.trim();
+  const local  = document.getElementById('pf-local').value.trim();
+  const remote = document.getElementById('pf-remote').value.trim();
+  const ns     = S.namespace;
+  if (!target || !local || !remote) {
+    toast('Missing fields', 'Target, local port, and remote port are required.', 'warn'); return;
+  }
+  const r = await fetch('/api/portforward', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({target, local, remote, namespace: ns})
+  });
+  const d = await r.json();
+  if (d.ok) {
+    toast('Port forward started', `${local}:${remote} → ${target}`, 'ok');
+    document.getElementById('pf-target').value = '';
+    document.getElementById('pf-local').value  = '';
+    document.getElementById('pf-remote').value = '';
+    loadPortForwards();
+  } else {
+    toast('Failed', d.error || 'port-forward failed', 'error');
+  }
+}
+
+async function loadPortForwards() {
+  const r = await fetch('/api/portforward');
+  const d = await r.json();
+  const tbody = document.getElementById('pf-tbody');
+  if (!d.portforwards.length) {
+    tbody.innerHTML = '<tr><td colspan="5" class="text-center text-slate-600 py-8">No active port forwards.</td></tr>';
+    return;
+  }
+  tbody.innerHTML = d.portforwards.map(pf => `
+    <tr>
+      <td class="text-slate-200">${escHtml(pf.target)}</td>
+      <td class="text-slate-400">${escHtml(pf.ns)}</td>
+      <td class="text-green-400">${escHtml(pf.local)}</td>
+      <td class="text-blue-400">${escHtml(pf.remote)}</td>
+      <td>
+        <button onclick="stopPortForward('${escHtml(pf.id)}')"
+                class="px-2 py-0.5 rounded text-xs bg-red-900 text-red-300 hover:bg-red-800 transition">
+          Stop
+        </button>
+      </td>
+    </tr>`).join('');
+}
+
+async function stopPortForward(id) {
+  await fetch(`/api/portforward/${encodeURIComponent(id)}`, {method:'DELETE'});
+  toast('Stopped', 'Port forward terminated.', 'warn');
+  loadPortForwards();
+}
+
+// ── Health overview ───────────────────────────────────────────────────────────
+async function loadHealth() {
+  const ns   = S.namespace;
+  const all  = S.allNs;
+  const r = await fetch(`/api/health?namespace=${encodeURIComponent(ns)}&all=${all}`);
+  const d = await r.json();
+
+  document.getElementById('health-ts').textContent =
+    `Updated ${new Date().toLocaleTimeString()}`;
+
+  if (!d.ok) {
+    document.getElementById('health-cards').innerHTML =
+      `<p class="text-red-400 text-xs">${escHtml(d.error)}</p>`;
+    return;
+  }
+
+  const c = d.counts;
+  const cards = [
+    {label:'Total',     val:c.total,     bg:'#1e293b', fg:'#94a3b8'},
+    {label:'Running',   val:c.running,   bg:'#14532d', fg:'#4ade80'},
+    {label:'Pending',   val:c.pending,   bg:'#451a03', fg:'#fbbf24'},
+    {label:'Failed',    val:c.failed,    bg:'#450a0a', fg:'#f87171'},
+    {label:'Succeeded', val:c.succeeded, bg:'#1e3a5f', fg:'#93c5fd'},
+    {label:'Unknown',   val:c.unknown,   bg:'#1e293b', fg:'#64748b'},
+  ];
+
+  document.getElementById('health-cards').innerHTML = cards.map(card => `
+    <div class="health-card" style="background:${card.bg};border-color:${card.bg}">
+      <div class="count" style="color:${card.fg}">${card.val}</div>
+      <div class="label" style="color:${card.fg}">${card.label}</div>
+    </div>`).join('');
+
+  const alertsEl = document.getElementById('health-alerts');
+  if (d.alerts.length === 0) {
+    alertsEl.innerHTML = '<p class="text-green-400 text-xs mt-2">✓ No alerts — all pods healthy.</p>';
+  } else {
+    alertsEl.innerHTML = `
+      <p class="text-red-400 text-xs font-bold mb-2">⚠ ${d.alerts.length} pod(s) with issues:</p>
+      <table class="pf-table w-full border-collapse">
+        <thead><tr><th>Pod</th><th>Namespace</th><th>Container</th><th>Reason</th><th>Restarts</th></tr></thead>
+        <tbody>${d.alerts.map(a => `
+          <tr>
+            <td class="text-slate-200">${escHtml(a.name)}</td>
+            <td class="text-slate-400">${escHtml(a.namespace)}</td>
+            <td class="text-slate-400">${escHtml(a.container)}</td>
+            <td><span class="badge badge-red">${escHtml(a.reason)}</span></td>
+            <td class="text-amber-400">${a.restarts}</td>
+          </tr>`).join('')}
+        </tbody>
+      </table>`;
+  }
+
+  // Update alert badge
+  updateAlertBadge(d.alerts);
+}
+
+function updateAlertBadge(alerts) {
+  const badge = document.getElementById('alert-badge');
+  if (alerts.length > 0) {
+    badge.textContent = `⚠ ${alerts.length}`;
+    badge.classList.remove('hidden');
+  } else {
+    badge.classList.add('hidden');
+  }
+}
+
+async function pollAlerts() {
+  try {
+    const ns  = document.getElementById('ns-select')?.value || 'default';
+    const all = document.getElementById('chk-allns')?.checked || false;
+    const r   = await fetch(`/api/health?namespace=${encodeURIComponent(ns)}&all=${all}`);
+    const d   = await r.json();
+    if (!d.ok) return;
+    updateAlertBadge(d.alerts);
+    if (d.alerts.length > S.lastAlertCount && d.alerts.length > 0) {
+      const names = d.alerts.slice(0,3).map(a => a.name).join(', ');
+      toast('⚠ Pod Alerts', `${d.alerts.length} pod(s) in error: ${names}`, 'error', 8000);
+    }
+    S.lastAlertCount = d.alerts.length;
+    S.lastAlerts     = d.alerts;
+  } catch(_) {}
+}
+
+// ── Topology ──────────────────────────────────────────────────────────────────
+async function loadTopology() {
+  const content = document.getElementById('topology-content');
+  content.innerHTML = '<p class="text-slate-600 text-sm">Loading…</p>';
+
+  const r = await fetch(`/api/topology?namespace=${encodeURIComponent(S.namespace)}&all=${S.allNs}`);
+  const d = await r.json();
+  if (!d.ok) {
+    content.innerHTML = `<p class="text-red-400 text-xs">${escHtml(d.error)}</p>`;
+    return;
+  }
+
+  if (!d.topology.length) {
+    content.innerHTML = '<p class="text-slate-600 text-sm">No deployments or pods found.</p>';
+    return;
+  }
+
+  const phaseColor = p => {
+    p = (p||'').toLowerCase();
+    if (p === 'running')   return '#4ade80';
+    if (p === 'pending')   return '#fbbf24';
+    if (p === 'succeeded') return '#93c5fd';
+    return '#f87171';
+  };
+
+  content.innerHTML = d.topology.map(node => {
+    const readyStr = node.kind === 'Deployment'
+      ? ` <span style="color:#64748b;font-size:11px">(${node.ready||0}/${node.replicas||0} ready)</span>`
+      : '';
+    const pods = node.pods.map(p => {
+      const col = phaseColor(p.phase);
+      const rst = p.restarts > 0 ? `<span style="color:#fbbf24;font-size:10px"> ↺${p.restarts}</span>` : '';
+      return `<div class="topo-pod" style="border-color:${col};color:${col}">
+        ${escHtml(p.name)}<span style="color:#64748b;font-size:10px"> ${escHtml(p.phase)}</span>${rst}
+      </div>`;
+    }).join('');
+    const icon = node.kind === 'Deployment' ? '📦' : node.kind === 'Standalone' ? '🔹' : '📋';
+    return `
+      <div class="topo-node">
+        <div class="topo-node-header">
+          <span>${icon}</span>
+          <span class="text-slate-200">${escHtml(node.name)}</span>
+          <span class="text-slate-500 text-xs">${escHtml(node.namespace)}</span>
+          ${readyStr}
+          <span class="text-slate-600 text-xs ml-auto">${escHtml(node.kind)}</span>
+        </div>
+        ${node.pods.length ? `<div class="topo-pods">${pods}</div>` :
+          '<div class="text-slate-600 text-xs mt-2 pl-4">No pods matched</div>'}
+      </div>`;
+  }).join('');
+}
+
+// ── Terminal (xterm.js) ────────────────────────────────────────────────────────
+function doTerminal() {
+  const names = selectedNames(); if (!names.length) return;
+  if (S.resource !== 'pods') {
+    toast('Pods only', 'Terminal works with pods only.', 'warn'); return;
+  }
+  const pod = names[0];
+  const ns  = S.namespace;
+  S.termPod = pod;
+  S.termNs  = ns;
+
+  document.getElementById('term-pod-label').textContent = `${pod}  (${ns})`;
+  openModal('terminal-modal');
+
+  // Populate container dropdown
+  fetch(`/api/containers?pod=${encodeURIComponent(pod)}&namespace=${encodeURIComponent(ns)}`)
+    .then(r => r.json()).then(d => {
+      const sel = document.getElementById('term-container');
+      sel.innerHTML = '<option value="">— all —</option>' +
+        (d.containers||[]).map(c => `<option>${escHtml(c)}</option>`).join('');
+    });
+
+  // Initialise xterm
+  if (!_xterm) {
+    _xterm    = new Terminal({
+      theme: {background:'#0d1117',foreground:'#c9d1d9',cursor:'#c9d1d9',
+               selection:'#264f78',black:'#0d1117',brightBlack:'#4d5566'},
+      fontSize: 12, fontFamily: 'Consolas, Monaco, monospace',
+      scrollback: 5000, convertEol: true,
+    });
+    _xtermFit = new FitAddon.FitAddon();
+    _xterm.loadAddon(_xtermFit);
+    _xterm.open(document.getElementById('xterm-container'));
+    setTimeout(() => _xtermFit.fit(), 100);
+  }
+  _xterm.clear();
+  _xterm.writeln(`\x1b[1;32mConnected to pod:\x1b[0m \x1b[33m${pod}\x1b[0m \x1b[90m(${ns})\x1b[0m`);
+  _xterm.writeln('\x1b[90mType commands and press Enter. Up/Down for history.\x1b[0m');
+  _xterm.writeln('');
+
+  document.getElementById('term-cmd-input').focus();
+}
+
+// Terminal input key handling
+document.addEventListener('DOMContentLoaded', () => {
+  const inp = document.getElementById('term-cmd-input');
+  inp.addEventListener('keydown', e => {
+    if (e.key === 'Enter')     { e.preventDefault(); termExec(); }
+    if (e.key === 'ArrowUp')   {
+      e.preventDefault();
+      if (_xtermHistIdx < _xtermHistory.length - 1)
+        inp.value = _xtermHistory[++_xtermHistIdx] || '';
+    }
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      if (_xtermHistIdx > 0) inp.value = _xtermHistory[--_xtermHistIdx];
+      else { _xtermHistIdx = -1; inp.value = ''; }
+    }
+  });
+});
+
+async function termExec() {
+  const inp = document.getElementById('term-cmd-input');
+  const cmd = inp.value.trim();
+  if (!cmd || !_xterm) return;
+  inp.value = '';
+  _xtermHistory.unshift(cmd);
+  _xtermHistIdx = -1;
+
+  const container = document.getElementById('term-container').value;
+  _xterm.writeln(`\x1b[36m$ ${cmd}\x1b[0m`);
+
+  const r = await fetch('/api/exec', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({pod: S.termPod, namespace: S.termNs, container, cmd})
+  });
+  const d = await r.json();
+  const lines = d.output ? d.output.split('\n') : [];
+  for (const line of lines) {
+    if (line !== '' || lines.length === 1)
+      _xterm.writeln(d.ok ? line : `\x1b[31m${line}\x1b[0m`);
+  }
+}
+
+function clearTerminal() {
+  if (_xterm) _xterm.clear();
+}
+
+// ── Auto-refresh ──────────────────────────────────────────────────────────────
+function toggleAutoRefresh(forceOff) {
+  if (S.autoRefreshTimer) { clearInterval(S.autoRefreshTimer); S.autoRefreshTimer = null; }
+  const chk = document.getElementById('chk-autorefresh');
+  if (forceOff === false) { chk.checked = false; return; }
+  if (!chk.checked) return;
+  const secs = Math.max(5, parseInt(document.getElementById('autorefresh-interval').value) || 30);
+  S.autoRefreshTimer = setInterval(refresh, secs * 1000);
+}
+
 // ── Output helpers ─────────────────────────────────────────────────────────────
 function appendOutput(text, tag) {
   const el   = document.getElementById('pane-output');
   const span = document.createElement('span');
-  span.className = tag ? `t-${tag}` : '';
+  span.className   = tag ? `t-${tag}` : '';
   span.textContent = text;
   el.appendChild(span);
   el.scrollTop = el.scrollHeight;
 }
 
 function clearOutput() {
-  const id = {output:'pane-output', logs:'log-output',
-               custom:'custom-output', yaml:'yaml-output'}[currentTab()];
+  const id = {output:'pane-output',logs:'log-output',custom:'custom-output',
+              yaml:'yaml-output',portforward:null,health:null,topology:null}[currentTab()];
   if (id) document.getElementById(id).innerHTML = '';
 }
 
-function clearYaml() { document.getElementById('yaml-output').textContent = ''; }
+function clearYaml() {
+  document.getElementById('yaml-output').textContent = '';
+  cancelYamlEdit();
+}
 
 function copyYaml() {
-  const txt = document.getElementById('yaml-output').textContent;
+  const txt = S.yamlEditMode
+    ? document.getElementById('yaml-edit').value
+    : document.getElementById('yaml-output').textContent;
   if (txt) navigator.clipboard.writeText(txt)
     .then(() => toast('Copied', 'YAML copied to clipboard.', 'ok'));
 }
 
 // ── Tabs ──────────────────────────────────────────────────────────────────────
+const ALL_TABS = ['output','logs','custom','yaml','portforward','health','topology'];
+
 function switchTab(name) {
-  ['output','logs','custom','yaml'].forEach(t => {
+  ALL_TABS.forEach(t => {
     document.getElementById(`pane-${t}`)?.classList.toggle('hidden', t !== name);
     document.getElementById(`tab-${t}`)?.classList.toggle('active', t === name);
   });
   document.getElementById(`pane-${name}`)?.classList.remove('hidden');
+  if (name === 'portforward') loadPortForwards();
 }
 
 function currentTab() {
-  for (const t of ['output','logs','custom','yaml'])
+  for (const t of ALL_TABS)
     if (!document.getElementById(`pane-${t}`)?.classList.contains('hidden')) return t;
   return 'output';
 }
 
 // ── Toast ─────────────────────────────────────────────────────────────────────
 function toast(title, msg, type='ok', duration=5000) {
-  const colors = {ok:'#166534,#bbf7d0', error:'#450a0a,#fca5a5',
-                  warn:'#451a03,#fde68a', info:'#172554,#bfdbfe'};
+  const colors = {ok:'#166534,#bbf7d0',error:'#450a0a,#fca5a5',
+                  warn:'#451a03,#fde68a',info:'#172554,#bfdbfe'};
   const [bg, fg] = (colors[type]||colors.info).split(',');
   const el = document.createElement('div');
   el.className = 'toast';
   el.style.background = bg; el.style.color = fg;
-  el.innerHTML = `<div><div style="font-weight:700;font-size:13px">${escHtml(title)}</div>
+  el.innerHTML = `<div>
+    <div style="font-weight:700;font-size:13px">${escHtml(title)}</div>
     <div style="font-size:12px;margin-top:2px;opacity:.85">${escHtml(msg)}</div></div>`;
   el.onclick = () => el.remove();
   document.getElementById('toast-container').appendChild(el);
@@ -1114,9 +1862,7 @@ function toast(title, msg, type='ok', duration=5000) {
 (function() {
   const handle  = document.getElementById('resize-handle');
   const panel   = document.getElementById('output-panel');
-  const wrapper = document.getElementById('table-wrapper');
   let dragging  = false, startY = 0, startH = 0;
-
   handle.addEventListener('mousedown', e => {
     dragging = true; startY = e.clientY; startH = panel.offsetHeight;
     document.body.style.cursor = 'ns-resize';
@@ -1136,11 +1882,23 @@ function toast(title, msg, type='ok', duration=5000) {
 })();
 
 // ── Modals ────────────────────────────────────────────────────────────────────
-function closeModal(id) { document.getElementById(id).classList.add('hidden'); }
+function openModal(id)  { document.getElementById(id).classList.add('open'); }
+function closeModal(id) { document.getElementById(id).classList.remove('open'); }
+
+// Close modal on overlay click
+document.addEventListener('DOMContentLoaded', () => {
+  document.querySelectorAll('.modal-overlay').forEach(overlay => {
+    overlay.addEventListener('click', e => {
+      if (e.target === overlay) closeModal(overlay.id);
+    });
+  });
+});
 
 // ── Utils ─────────────────────────────────────────────────────────────────────
 function escHtml(s) {
-  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  return String(s)
+    .replace(/&/g,'&amp;').replace(/</g,'&lt;')
+    .replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
 </script>
 </body>
