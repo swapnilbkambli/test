@@ -785,11 +785,25 @@ if __name__ == "__main__":
     flask_thread.start()
     time.sleep(0.8)   # give Flask a moment to bind the port
 
+    # Calculate centered position using tkinter (already available on all platforms)
+    win_w, win_h = 1400, 860
+    try:
+        import tkinter as _tk
+        _r = _tk.Tk(); _r.withdraw()
+        sw, sh = _r.winfo_screenwidth(), _r.winfo_screenheight()
+        _r.destroy()
+        win_x = max(0, (sw - win_w) // 2)
+        win_y = max(0, (sh - win_h) // 2)
+    except Exception:
+        win_x = win_y = None
+
     webview.create_window(
         "GDP SKE Manager — Standard Chartered",
         url,
-        width=1400,
-        height=860,
+        width=win_w,
+        height=win_h,
+        x=win_x,
+        y=win_y,
         min_size=(900, 600),
         resizable=True,
     )
