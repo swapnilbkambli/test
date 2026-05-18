@@ -975,8 +975,8 @@ async function reloadNs(){
   try {
     const r=await fetch('/api/namespaces'), d=await r.json();
     if(d.ok) clusterNs=d.namespaces||[];
-    else toast('Namespace fetch failed',d.error,'warn');
-  } catch(e){ toast('Namespace fetch failed',String(e),'warn'); }
+    // silently fall back to pinned namespaces if the user lacks list-namespace RBAC
+  } catch(_){}
   const pinned=S.pinnedNs, all=[...pinned,...clusterNs.filter(n=>!pinned.includes(n))];
   if(!all.length) return;
   const sel=document.getElementById('ns-select'), current=sel.value||S.namespace;
@@ -1016,7 +1016,7 @@ async function refresh(){
   const params=new URLSearchParams({type:S.resource,namespace:S.namespace,all:S.allNs});
   const r=await fetch(`/api/resources?${params}`), d=await r.json();
   appendOutput(`» ${d.command||''}\n`,'cmd');
-  if(!d.ok){ appendOutput(d.error+'\n','err'); return; }
+  if(!d.ok){ appendOutput((d.error||d.output||'(command failed)')+'\n','err'); return; }
   S.headers=d.headers; S.rows=d.rows; S.filteredRows=d.rows;
   applyFilter();
   document.getElementById('row-count').textContent=`${d.rows.length} ${S.resource}`;
@@ -1309,7 +1309,8 @@ async function runCustom(){
   const el=document.getElementById('custom-output');
   el.innerHTML+=`<span class="t-cmd">» ${escHtml(cmd)}\n</span>`;
   const r=await fetch('/api/command',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({cmd})}), d=await r.json();
-  const span=document.createElement('span'); span.className=d.ok?'t-ok':'t-err'; span.textContent=d.output+'\n';
+  const text=(d.ok?d.output:(d.output||d.error||'(command failed)'))+'\n';
+  const span=document.createElement('span'); span.className=d.ok?'t-ok':'t-err'; span.textContent=text;
   el.appendChild(span); el.scrollTop=el.scrollHeight;
 }
 function quickCmd(cmd){ document.getElementById('custom-cmd').value=cmd; runCustom(); }
