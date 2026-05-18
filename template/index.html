@@ -125,6 +125,7 @@ body {
   font-family: Consolas, Monaco, monospace; font-size: 12.5px;
   line-height: 1.6; white-space: pre-wrap; word-break: break-all;
   overflow-y: auto; padding: 12px 14px;
+  user-select: text; -webkit-user-select: text;
 }
 .terminal .t-cmd  { color: #58A6FF; }
 .terminal .t-ok   { color: #3FB950; }
@@ -557,6 +558,7 @@ select.sel:focus { border-color: var(--input-focus); }
       <button class="tab-btn"        onclick="switchTab('health');loadHealth()" id="tab-health">💚 Health</button>
       <button class="tab-btn"        onclick="switchTab('topology');loadTopology()" id="tab-topology">🗂 Topology</button>
       <div style="flex:1"></div>
+      <button onclick="copyCurrentTab()" style="font-size:11px;color:var(--text3);padding:0 8px;background:none;border:none;cursor:pointer">📋 Copy</button>
       <button onclick="clearOutput()" style="font-size:11px;color:var(--text3);padding:0 8px;background:none;border:none;cursor:pointer">Clear</button>
     </div>
 
@@ -1085,6 +1087,7 @@ async function doDelete(){
 async function doRestart(){
   const names=selectedNames(); if(!names.length) return;
   if(!['deployments','daemonsets','statefulsets'].includes(S.resource)){ toast('Not supported','Restart works for deployments, daemonsets, statefulsets.','warn'); return; }
+  if(!confirm(`Rolling restart ${names.length} ${S.resource}(s)?\n\n${names.join(', ')}`)) return;
   switchTab('output');
   for(const name of names){
     const r=await fetch('/api/restart',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({type:S.resource,name,namespace:S.namespace})});
@@ -1170,6 +1173,7 @@ function makeEditorRow(key,val){
 function editorAddKey(){ document.getElementById('editor-rows').appendChild(makeEditorRow('','')); }
 async function saveEditor(){
   const m=document.getElementById('editor-modal');
+  if(!confirm(`Save changes to ${m.dataset.resType}/${m.dataset.name} in "${m.dataset.namespace}"?\n\nThis will apply the updated data to the cluster.`)) return;
   const data={};
   for(const row of document.querySelectorAll('#editor-rows .editor-row')){
     const k=row.querySelector('input').value.trim(), v=row.querySelector('textarea').value;
@@ -1204,6 +1208,7 @@ function cancelYamlEdit(){
 async function applyYaml(){
   const yaml=document.getElementById('yaml-edit').value.trim();
   if(!yaml){ toast('Empty','Nothing to apply.','warn'); return; }
+  if(!confirm('Apply this YAML to the cluster?\n\nThis will create or update resources.')) return;
   const r=await fetch('/api/apply',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({yaml})});
   const d=await r.json(); cancelYamlEdit(); switchTab('output');
   appendOutput(`» ${d.command}\n`,'cmd'); appendOutput(d.output+'\n',d.ok?'ok':'err');
@@ -1422,6 +1427,14 @@ function clearOutput(){
   const ids={output:'pane-output',logs:'log-output',custom:'custom-output',yaml:'yaml-output'};
   const id=ids[currentTab()]; if(id) document.getElementById(id).innerHTML='';
 }
+function copyCurrentTab(){
+  const tab=currentTab();
+  let txt='';
+  if(tab==='yaml') txt=S.yamlEditMode?document.getElementById('yaml-edit').value:document.getElementById('yaml-output').textContent;
+  else { const ids={output:'pane-output',logs:'log-output',custom:'custom-output'}; const id=ids[tab]; if(id) txt=document.getElementById(id).textContent; }
+  if(!txt.trim()){ toast('Nothing to copy','The pane is empty.','warn'); return; }
+  navigator.clipboard.writeText(txt).then(()=>toast('Copied','Output copied to clipboard.','ok'),()=>toast('Copy failed','Clipboard access denied.','error'));
+}
 function clearYaml(){ document.getElementById('yaml-output').textContent=''; cancelYamlEdit(); }
 function copyYaml(){
   const txt=S.yamlEditMode?document.getElementById('yaml-edit').value:document.getElementById('yaml-output').textContent;
@@ -1430,9 +1443,11 @@ function copyYaml(){
 
 // ── Tabs ──────────────────────────────────────────────────────────────────────
 const ALL_TABS=['output','logs','custom','yaml','portforward','health','topology'];
+const BLOCK_PANES=new Set(['output','yaml']); // plain text terminals — must NOT be flex containers
 function switchTab(name){
   ALL_TABS.forEach(t=>{
-    const p=document.getElementById(`pane-${t}`); if(p) p.style.display=t===name?'flex':'none';
+    const p=document.getElementById(`pane-${t}`);
+    if(p) p.style.display=t===name?(BLOCK_PANES.has(t)?'block':'flex'):'none';
     document.getElementById(`tab-${t}`)?.classList.toggle('active',t===name);
   });
   if(name==='portforward') loadPortForwards();
