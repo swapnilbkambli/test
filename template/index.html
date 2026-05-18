@@ -113,18 +113,24 @@ body {
 }
 .mono { font-family: Consolas, Monaco, 'Courier New', monospace; }
 
-/* ── Scrollbar ─────────────────────────────────────────────────────────────── */
-::-webkit-scrollbar { width: 6px; height: 6px; }
+/* ── Scrollbar (global, light surfaces) ─────────────────────────────────── */
+::-webkit-scrollbar { width: 7px; height: 7px; }
 ::-webkit-scrollbar-track { background: var(--scrl-track); }
-::-webkit-scrollbar-thumb { background: var(--scrl-thumb); border-radius: 3px; }
+::-webkit-scrollbar-thumb { background: var(--scrl-thumb); border-radius: 4px; }
 ::-webkit-scrollbar-thumb:hover { background: var(--border2); }
+/* Terminal scrollbar always visible in dark style */
+.terminal { overflow-y: scroll; }
+.terminal::-webkit-scrollbar { width: 7px; }
+.terminal::-webkit-scrollbar-track { background: #1a1a1a; }
+.terminal::-webkit-scrollbar-thumb { background: #4a4a4a; border-radius: 4px; }
+.terminal::-webkit-scrollbar-thumb:hover { background: #6a6a6a; }
 
 /* ── Terminal ──────────────────────────────────────────────────────────────── */
 .terminal {
   background: #0D1117; color: #C9D1D9;
   font-family: Consolas, Monaco, monospace; font-size: 12.5px;
   line-height: 1.6; white-space: pre-wrap; word-break: break-all;
-  overflow-y: auto; padding: 12px 14px;
+  padding: 12px 14px;
   user-select: text; -webkit-user-select: text;
 }
 .terminal .t-cmd  { color: #58A6FF; }
@@ -564,7 +570,7 @@ select.sel:focus { border-color: var(--input-focus); }
     </div>
 
     <!-- Output -->
-    <div id="pane-output" class="terminal" style="flex:1;overflow-y:auto"></div>
+    <div id="pane-output" class="terminal" style="flex:1;overflow-y:scroll"></div>
 
     <!-- Live Logs -->
     <div id="pane-logs" style="display:none;flex-direction:column;flex:1;overflow:hidden">
@@ -586,7 +592,7 @@ select.sel:focus { border-color: var(--input-focus); }
         <button onclick="downloadLogs()" class="btn btn-sm">⬇ Download</button>
         <button onclick="clearLogs()" style="font-size:11px;color:var(--text3);background:none;border:none;cursor:pointer">Clear</button>
       </div>
-      <div id="log-output" class="terminal" style="flex:1;overflow-y:auto"></div>
+      <div id="log-output" class="terminal" style="flex:1;overflow-y:scroll"></div>
     </div>
 
     <!-- Custom -->
@@ -610,7 +616,7 @@ select.sel:focus { border-color: var(--input-focus); }
         <button class="btn btn-sm" onclick="quickCmd('kubectl get namespaces')">Namespaces</button>
         <button class="btn btn-sm" onclick="quickCmd('kubectl version --short')">Version</button>
       </div>
-      <div id="custom-output" class="terminal" style="flex:1;overflow-y:auto"></div>
+      <div id="custom-output" class="terminal" style="flex:1;overflow-y:scroll"></div>
     </div>
 
     <!-- YAML -->
@@ -625,7 +631,7 @@ select.sel:focus { border-color: var(--input-focus); }
       </div>
       <div id="yaml-output" class="terminal" style="flex:1;overflow-y:auto;color:#c084fc"></div>
       <textarea id="yaml-edit" spellcheck="false"
-                style="display:none;flex:1;background:#0D1117;color:#c084fc;font-family:Consolas,Monaco,monospace;font-size:12.5px;line-height:1.6;padding:12px 14px;border:none;outline:none;resize:none;overflow-y:auto"></textarea>
+                style="display:none;flex:1;background:#0D1117;color:#c084fc;font-family:Consolas,Monaco,monospace;font-size:12.5px;line-height:1.6;padding:12px 14px;border:none;outline:none;resize:none;overflow-y:scroll"></textarea>
     </div>
 
     <!-- Port Forward -->
@@ -654,6 +660,10 @@ select.sel:focus { border-color: var(--input-focus); }
       <div style="display:flex;align-items:center;gap:10px;padding:6px 10px;border-bottom:1px solid var(--border);flex-shrink:0;background:var(--surface2)">
         <span style="font-size:11px;font-weight:600;color:var(--text3)">NAMESPACE HEALTH</span>
         <button onclick="loadHealth()" class="btn btn-sm">⟳ Refresh</button>
+        <label style="display:flex;align-items:center;gap:5px;font-size:12px;color:var(--text2);cursor:pointer;margin-left:8px">
+          <input type="checkbox" id="chk-health-poll" style="accent-color:var(--brand)" onchange="toggleHealthPoll()" />
+          Auto-poll (60s)
+        </label>
         <span id="health-ts" style="font-size:11px;color:var(--text3);margin-left:auto"></span>
       </div>
       <div style="flex:1;overflow:auto;padding:12px;background:var(--bg)">
@@ -690,8 +700,6 @@ select.sel:focus { border-color: var(--input-focus); }
   <div class="ctx-item" onclick="doDelete()" style="color:var(--err-fg)">🗑 Delete</div>
   <div class="ctx-item" onclick="copyName()">📋 Copy name</div>
 </div>
-
-<div id="toast-container"></div>
 
 <!-- ═══ SCALE MODAL ═══════════════════════════════════════════════════════════ -->
 <div id="scale-modal" class="modal-overlay">
@@ -781,6 +789,7 @@ const S = {
   pinnedNs:[], lastAlertCount:0, lastAlerts:[],
   autoRefreshTimer:null, termPod:'', termNs:'', yamlEditMode:false,
   sessWarnShown:false, sessExpiredShown:false, sessToastEl:null,
+  healthPollTimer:null,
 };
 
 let _xterm=null, _xtermFit=null, _xtermHistory=[], _xtermHistIdx=-1;
@@ -822,7 +831,6 @@ document.addEventListener('DOMContentLoaded', async () => {
   startSessionPoll();
   loadContexts();
   renderHistoryList();
-  setInterval(pollAlerts, 60000);
 });
 
 // ── Config / environments ─────────────────────────────────────────────────────
@@ -881,7 +889,7 @@ async function doLogin(){
     S.activeEnv=envName; await loadEnvList();
   }
   document.getElementById('login-overlay').style.display='none';
-  await loadContexts(); await reloadNs(); refresh(); startSessionPoll(); pollAlerts();
+  await loadContexts(); await reloadNs(); refresh(); startSessionPoll();
 }
 function doLogout(){
   S.logSource&&S.logSource.close(); toggleAutoRefresh(false);
@@ -1392,6 +1400,13 @@ async function pollAlerts(){
     S.lastAlertCount=d.alerts.length; S.lastAlerts=d.alerts;
   }catch(_){}
 }
+function toggleHealthPoll(){
+  if(S.healthPollTimer){ clearInterval(S.healthPollTimer); S.healthPollTimer=null; }
+  if(document.getElementById('chk-health-poll').checked){
+    pollAlerts();
+    S.healthPollTimer=setInterval(pollAlerts,60000);
+  }
+}
 
 // ── Topology ──────────────────────────────────────────────────────────────────
 async function loadTopology(){
@@ -1528,5 +1543,6 @@ function closeModal(id){ document.getElementById(id).classList.remove('open'); }
 // ── Utils ─────────────────────────────────────────────────────────────────────
 function escHtml(s){ return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
 </script>
+<div id="toast-container"></div>
 </body>
 </html>
