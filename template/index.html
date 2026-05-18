@@ -935,9 +935,14 @@ async function switchCtx(){
 
 // ── Namespaces ────────────────────────────────────────────────────────────────
 async function reloadNs(){
-  const r=await fetch('/api/namespaces'), d=await r.json();
-  if(!d.ok){ toast('Error',d.error,'error'); return; }
-  const pinned=S.pinnedNs, all=[...pinned,...d.namespaces.filter(n=>!pinned.includes(n))];
+  let clusterNs=[];
+  try {
+    const r=await fetch('/api/namespaces'), d=await r.json();
+    if(d.ok) clusterNs=d.namespaces||[];
+    else toast('Namespace fetch failed',d.error,'warn');
+  } catch(e){ toast('Namespace fetch failed',String(e),'warn'); }
+  const pinned=S.pinnedNs, all=[...pinned,...clusterNs.filter(n=>!pinned.includes(n))];
+  if(!all.length) return;
   const sel=document.getElementById('ns-select'), current=sel.value||S.namespace;
   sel.innerHTML='';
   all.forEach(ns=>{ const o=document.createElement('option'); o.value=ns; o.textContent=pinned.includes(ns)?`★ ${ns}`:ns; sel.appendChild(o); });
@@ -967,6 +972,7 @@ async function removeNs(){
 
 // ── Resource table ────────────────────────────────────────────────────────────
 async function refresh(){
+  await reloadNs();
   S.resource=document.getElementById('res-select').value;
   S.namespace=document.getElementById('ns-select').value;
   S.allNs=document.getElementById('chk-allns').checked;
