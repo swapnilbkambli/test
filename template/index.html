@@ -286,7 +286,8 @@ select.sel:focus { border-color: var(--input-focus); }
   animation: slide-in .2s ease-out; display: flex; align-items: flex-start; gap: 10px;
   border-left: 4px solid transparent;
 }
-@keyframes slide-in { from{transform:translateX(110%);opacity:0} to{transform:translateX(0);opacity:1} }
+@keyframes slide-in  { from{transform:translateX(110%);opacity:0} to{transform:translateX(0);opacity:1} }
+@keyframes slide-out { from{transform:translateX(0);opacity:1} to{transform:translateX(110%);opacity:0} }
 
 /* ── Modal ─────────────────────────────────────────────────────────────────── */
 .modal-overlay {
@@ -779,6 +780,7 @@ const S = {
   sortCol:-1, sortDir:1, logSource:null, sessionTimer:null,
   pinnedNs:[], lastAlertCount:0, lastAlerts:[],
   autoRefreshTimer:null, termPod:'', termNs:'', yamlEditMode:false,
+  sessWarnShown:false, sessExpiredShown:false, sessToastEl:null,
 };
 
 let _xterm=null, _xtermFit=null, _xtermHistory=[], _xtermHistIdx=-1;
@@ -889,6 +891,28 @@ function doLogout(){
 
 // ── Session ───────────────────────────────────────────────────────────────────
 function startSessionPoll(){ clearInterval(S.sessionTimer); S.sessionTimer=setInterval(pollSession,30000); pollSession(); }
+
+function _sessToast(title,msg,type,duration){
+  // Remove any previous session toast before showing a new one
+  if(S.sessToastEl&&S.sessToastEl.parentNode) S.sessToastEl.parentNode.removeChild(S.sessToastEl);
+  S.sessToastEl=null;
+  const cfg={ok:{bg:'var(--ok-bg)',fg:'var(--ok-fg)',brd:'var(--ok-fg)'},
+             error:{bg:'var(--err-bg)',fg:'var(--err-fg)',brd:'var(--err-fg)'},
+             warn:{bg:'var(--warn-bg)',fg:'var(--warn-fg)',brd:'var(--warn-fg)'}};
+  const s=cfg[type]||cfg.warn;
+  const el=document.createElement('div'); el.className='toast';
+  el.style.background=s.bg; el.style.color=s.fg; el.style.borderLeftColor=s.brd;
+  el.innerHTML=`<div><div style="font-weight:700;font-size:13px">${escHtml(title)}</div><div style="font-size:12px;margin-top:2px;opacity:.85">${escHtml(msg)}</div></div>`;
+  const dismiss=()=>{
+    el.style.animation='slide-out .25s ease-in forwards';
+    setTimeout(()=>{ if(el.parentNode) el.parentNode.removeChild(el); if(S.sessToastEl===el) S.sessToastEl=null; },240);
+  };
+  el.onclick=dismiss;
+  document.getElementById('toast-container').appendChild(el);
+  S.sessToastEl=el;
+  if(duration>0) setTimeout(dismiss,duration);
+}
+
 async function pollSession(){
   try{
     const r=await fetch('/api/session'), d=await r.json();
@@ -899,8 +923,15 @@ async function pollSession(){
     } else {
       el.textContent=fmtCountdown(d.remaining);
       el.className='mono '+sessionClass(d.remaining); el.style.fontSize='12px'; el.style.fontWeight='700';
-      if(d.remaining<=300&&d.remaining>270) toast('⚠ Session expiring',`Expires in ${fmtCountdown(d.remaining)}`,'warn');
-      if(d.remaining<=0) toast('✖ Session expired','Please renew or log in again.','error',0);
+      if(d.remaining<=300&&d.remaining>270&&!S.sessWarnShown){
+        S.sessWarnShown=true;
+        _sessToast('⚠ Session expiring',`Expires in ${fmtCountdown(d.remaining)}`,'warn',8000);
+      }
+      if(d.remaining<=0&&!S.sessExpiredShown){
+        S.sessExpiredShown=true;
+        _sessToast('✖ Session expired','Please renew or log in again.','error',0);
+      }
+      if(d.remaining>300){ S.sessWarnShown=false; S.sessExpiredShown=false; }
     }
   }catch(_){}
 }
@@ -912,6 +943,9 @@ function fmtCountdown(s){
 }
 async function doRenew(){
   const r=await fetch('/api/renew',{method:'POST'}), d=await r.json();
+  S.sessWarnShown=false; S.sessExpiredShown=false;
+  if(S.sessToastEl&&S.sessToastEl.parentNode) S.sessToastEl.parentNode.removeChild(S.sessToastEl);
+  S.sessToastEl=null;
   toast(d.ok?'Session renewed':'Renew failed',d.ok?'Token refreshed.':(d.error||''),d.ok?'ok':'error');
   if(d.ok) pollSession();
 }
@@ -1464,9 +1498,13 @@ function toast(title,msg,type='ok',duration=5000){
   const el=document.createElement('div'); el.className='toast';
   el.style.background=s.bg; el.style.color=s.fg; el.style.borderLeftColor=s.brd;
   el.innerHTML=`<div><div style="font-weight:700;font-size:13px">${escHtml(title)}</div><div style="font-size:12px;margin-top:2px;opacity:.85">${escHtml(msg)}</div></div>`;
-  el.onclick=()=>el.remove();
+  const dismiss=()=>{
+    el.style.animation='slide-out .25s ease-in forwards';
+    setTimeout(()=>{ if(el.parentNode) el.parentNode.removeChild(el); },240);
+  };
+  el.onclick=dismiss;
   document.getElementById('toast-container').appendChild(el);
-  if(duration>0) setTimeout(()=>el.remove(),duration);
+  if(duration>0) setTimeout(dismiss,duration);
 }
 
 // ── Resize handle ─────────────────────────────────────────────────────────────
