@@ -874,6 +874,8 @@ async function doLogin(){
   if(!d.ok){ err.textContent=d.error||'Login failed.'; err.style.display='block'; return; }
   if(document.getElementById('chk-save').checked){
     const envName=document.getElementById('f-env-name').value.trim()||document.getElementById('env-select').value||'default';
+    // New environment starts with empty pins; existing environment keeps its current pins
+    if(envName!==S.activeEnv) S.pinnedNs=[];
     await fetch('/api/config',{method:'POST',headers:{'Content-Type':'application/json'},
       body:JSON.stringify({name:envName,...payload,pinned_namespaces:S.pinnedNs})});
     S.activeEnv=envName; await loadEnvList();
@@ -883,6 +885,8 @@ async function doLogin(){
 }
 function doLogout(){
   S.logSource&&S.logSource.close(); toggleAutoRefresh(false);
+  // Clear environment-specific state so pins from the previous env don't bleed into the next
+  S.pinnedNs=[]; S.activeEnv='';
   document.getElementById('login-overlay').style.display='flex';
   document.getElementById('ctx-switcher').innerHTML='<option>—</option>';
   document.getElementById('session-timer').textContent='—';
