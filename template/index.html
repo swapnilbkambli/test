@@ -595,28 +595,37 @@ select.sel:focus { border-color: var(--input-focus); }
       <div id="log-output" class="terminal" style="flex:1;overflow-y:scroll"></div>
     </div>
 
-    <!-- Custom -->
+    <!-- Shell (replaces single-command custom) -->
     <div id="pane-custom" style="display:none;flex-direction:column;flex:1;overflow:hidden">
-      <div style="display:flex;gap:8px;padding:6px 10px;border-bottom:1px solid var(--border);flex-shrink:0;background:var(--surface2)">
-        <select id="cmd-history" class="sel inp-sm" style="width:130px" onchange="pickHistory()">
-          <option value="">History…</option>
+      <!-- Toolbar -->
+      <div style="display:flex;align-items:center;gap:8px;padding:5px 10px;border-bottom:1px solid var(--border);flex-shrink:0;background:var(--surface2);flex-wrap:wrap">
+        <select id="shell-selector" class="sel inp-sm" style="width:140px">
+          <option value="auto">Auto (default shell)</option>
+          <option value="bash">bash</option>
+          <option value="zsh">zsh</option>
+          <option value="sh">sh</option>
+          <option value="powershell">PowerShell</option>
+          <option value="cmd">cmd.exe</option>
         </select>
-        <input id="custom-cmd" type="text" value="kubectl " class="inp mono"
-               style="flex:1;font-size:13px" placeholder="kubectl get pods -n default"
-               onkeydown="if(event.key==='Enter')runCustom()" />
-        <button onclick="runCustom()" class="btn btn-brand btn-sm">Run</button>
+        <button id="btn-shell-connect"    onclick="shellConnect()"    class="btn btn-sm btn-success">⚡ Connect</button>
+        <button id="btn-shell-disconnect" onclick="shellDisconnect()" class="btn btn-sm btn-danger" disabled>■ Disconnect</button>
+        <span id="shell-status" style="font-size:11px;color:var(--text3);margin-left:4px">Disconnected</span>
+        <div style="flex:1"></div>
+        <span style="font-size:10px;color:var(--text3)">Right-click: paste &nbsp;|&nbsp; Select: copy</span>
       </div>
-      <div style="display:flex;flex-wrap:wrap;gap:6px;padding:6px 10px;border-bottom:1px solid var(--border);flex-shrink:0;background:var(--surface2)">
-        <button class="btn btn-sm" onclick="quickCmd('kubectl get nodes -o wide')">Get nodes</button>
-        <button class="btn btn-sm" onclick="quickCmd('kubectl cluster-info')">Cluster info</button>
-        <button class="btn btn-sm" onclick="quickCmd('kubectl top nodes')">Top nodes</button>
-        <button class="btn btn-sm" onclick="quickCmd('kubectl top pods -n '+S.namespace)">Top pods</button>
-        <button class="btn btn-sm" onclick="quickCmd('kubectl config get-contexts')">Contexts</button>
-        <button class="btn btn-sm" onclick="quickCmd('kubectl api-resources')">API resources</button>
-        <button class="btn btn-sm" onclick="quickCmd('kubectl get namespaces')">Namespaces</button>
-        <button class="btn btn-sm" onclick="quickCmd('kubectl version --short')">Version</button>
+      <!-- Quick-inject chips -->
+      <div style="display:flex;flex-wrap:wrap;gap:5px;padding:5px 10px;border-bottom:1px solid var(--border);flex-shrink:0;background:var(--surface2)">
+        <button class="btn btn-sm" onclick="shellQuick('kubectl get nodes -o wide\n')">Nodes</button>
+        <button class="btn btn-sm" onclick="shellQuick('kubectl cluster-info\n')">Cluster info</button>
+        <button class="btn btn-sm" onclick="shellQuick('kubectl top nodes\n')">Top nodes</button>
+        <button class="btn btn-sm" onclick="shellQuick('kubectl top pods -n '+S.namespace+'\n')">Top pods</button>
+        <button class="btn btn-sm" onclick="shellQuick('kubectl config get-contexts\n')">Contexts</button>
+        <button class="btn btn-sm" onclick="shellQuick('kubectl api-resources\n')">API resources</button>
+        <button class="btn btn-sm" onclick="shellQuick('kubectl get namespaces\n')">Namespaces</button>
+        <button class="btn btn-sm" onclick="shellQuick('kubectl version --short 2>/dev/null || kubectl version\n')">Version</button>
       </div>
-      <div id="custom-output" class="terminal" style="flex:1;overflow-y:scroll"></div>
+      <!-- xterm.js terminal -->
+      <div id="shell-term" style="flex:1;background:#0D1117;padding:4px 8px;overflow:hidden"></div>
     </div>
 
     <!-- YAML -->
@@ -1314,30 +1323,112 @@ function downloadLogs(){
   a.click(); URL.revokeObjectURL(a.href);
 }
 
-// ── Custom command ─────────────────────────────────────────────────────────────
-async function runCustom(){
-  const cmd=document.getElementById('custom-cmd').value.trim(); if(!cmd) return;
-  addToHistory(cmd); switchTab('custom');
-  const el=document.getElementById('custom-output');
-  el.innerHTML+=`<span class="t-cmd">» ${escHtml(cmd)}\n</span>`;
-  const r=await fetch('/api/command',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({cmd})}), d=await r.json();
-  const text=(d.ok?d.output:(d.output||d.error||'(command failed)'))+'\n';
-  const span=document.createElement('span'); span.className=d.ok?'t-ok':'t-err'; span.textContent=text;
-  el.appendChild(span); el.scrollTop=el.scrollHeight;
+// ── Shell terminal ────────────────────────────────────────────────────────────
+let _shellTerm=null, _shellFit=null, _shellSock=null, _shellResizeObs=null;
+
+function _initShellTerm(){
+  if(_shellTerm) return;
+  _shellTerm = new Terminal({
+    cursorBlink: true,
+    fontFamily: 'Consolas, "Cascadia Code", Monaco, monospace',
+    fontSize: 13,
+    lineHeight: 1.4,
+    scrollback: 5000,
+    copyOnSelect: true,
+    rightClickSelectsWord: false,
+    theme: {
+      background:'#0D1117', foreground:'#C9D1D9', cursor:'#58A6FF',
+      selectionBackground:'rgba(88,166,255,0.3)',
+      black:'#0D1117', red:'#FF7B72', green:'#3FB950', yellow:'#D29922',
+      blue:'#58A6FF', magenta:'#BC8CFF', cyan:'#39C5CF', white:'#C9D1D9',
+      brightBlack:'#484F58', brightWhite:'#ECEFF4',
+    },
+  });
+  _shellFit = new FitAddon.FitAddon();
+  _shellTerm.loadAddon(_shellFit);
+  _shellTerm.open(document.getElementById('shell-term'));
+  _shellFit.fit();
+
+  // Send all keystrokes to server
+  _shellTerm.onData(data => {
+    if(_shellSock && _shellSock.readyState===WebSocket.OPEN)
+      _shellSock.send(data);
+  });
+
+  // Right-click: paste from clipboard
+  document.getElementById('shell-term').addEventListener('contextmenu', async e => {
+    e.preventDefault();
+    try {
+      const txt = await navigator.clipboard.readText();
+      if(txt && _shellSock && _shellSock.readyState===WebSocket.OPEN)
+        _shellSock.send(txt);
+    } catch(_){}
+  });
+
+  // Refit when panel is resized
+  _shellResizeObs = new ResizeObserver(() => {
+    if(_shellFit) {
+      try { _shellFit.fit(); } catch(_){}
+      _sendResize();
+    }
+  });
+  _shellResizeObs.observe(document.getElementById('shell-term'));
 }
-function quickCmd(cmd){ document.getElementById('custom-cmd').value=cmd; runCustom(); }
-function addToHistory(cmd){
-  let h=JSON.parse(localStorage.getItem('ske_cmd_history')||'[]');
-  h=[cmd,...h.filter(c=>c!==cmd)].slice(0,20); localStorage.setItem('ske_cmd_history',JSON.stringify(h)); renderHistoryList();
+
+function _sendResize(){
+  if(_shellSock && _shellSock.readyState===WebSocket.OPEN && _shellTerm)
+    _shellSock.send(`!resize:${_shellTerm.rows}:${_shellTerm.cols}`);
 }
-function renderHistoryList(){
-  const h=JSON.parse(localStorage.getItem('ske_cmd_history')||'[]');
-  document.getElementById('cmd-history').innerHTML='<option value="">History…</option>'+
-    h.map(c=>`<option value="${escHtml(c)}">${escHtml(c.length>55?c.slice(0,55)+'…':c)}</option>`).join('');
+
+function _setShellStatus(msg, color){
+  const el=document.getElementById('shell-status');
+  if(el){ el.textContent=msg; el.style.color=color||'var(--text3)'; }
 }
-function pickHistory(){
-  const v=document.getElementById('cmd-history').value;
-  if(v){ document.getElementById('custom-cmd').value=v; document.getElementById('custom-cmd').focus(); document.getElementById('cmd-history').value=''; }
+
+function shellConnect(){
+  _initShellTerm();
+  const shell=document.getElementById('shell-selector').value;
+  const url=`ws://127.0.0.1:${location.port}/ws/shell?shell=${encodeURIComponent(shell)}`;
+  _shellSock = new WebSocket(url);
+
+  _shellSock.onopen = () => {
+    _setShellStatus('Connected', 'var(--ok-fg)');
+    document.getElementById('btn-shell-connect').disabled=true;
+    document.getElementById('btn-shell-disconnect').disabled=false;
+    _shellTerm.focus();
+    _sendResize();
+  };
+  _shellSock.onmessage = e => {
+    if(_shellTerm) _shellTerm.write(e.data);
+  };
+  _shellSock.onclose = () => {
+    _setShellStatus('Disconnected', 'var(--text3)');
+    document.getElementById('btn-shell-connect').disabled=false;
+    document.getElementById('btn-shell-disconnect').disabled=true;
+  };
+  _shellSock.onerror = () => {
+    _setShellStatus('Connection error', 'var(--err-fg)');
+    document.getElementById('btn-shell-connect').disabled=false;
+    document.getElementById('btn-shell-disconnect').disabled=true;
+  };
+}
+
+function shellDisconnect(){
+  if(_shellSock){ _shellSock.close(); _shellSock=null; }
+}
+
+function shellQuick(cmd){
+  switchTab('custom');
+  if(!_shellSock || _shellSock.readyState!==WebSocket.OPEN){
+    toast('Not connected','Connect the shell first.','warn'); return;
+  }
+  _shellSock.send(cmd);
+  if(_shellTerm) _shellTerm.focus();
+}
+
+function shellClear(){
+  if(_shellTerm) _shellTerm.clear();
+}
 }
 
 // ── Port Forwarding ───────────────────────────────────────────────────────────
@@ -1478,14 +1569,22 @@ function appendOutput(text,tag){
   span.className=tag?`t-${tag}`:''; span.textContent=text; el.appendChild(span); el.scrollTop=el.scrollHeight;
 }
 function clearOutput(){
-  const ids={output:'pane-output',logs:'log-output',custom:'custom-output',yaml:'yaml-output'};
-  const id=ids[currentTab()]; if(id) document.getElementById(id).innerHTML='';
+  const tab=currentTab();
+  if(tab==='custom'){ shellClear(); return; }
+  const ids={output:'pane-output',logs:'log-output',yaml:'yaml-output'};
+  const id=ids[tab]; if(id) document.getElementById(id).innerHTML='';
 }
 function copyCurrentTab(){
   const tab=currentTab();
+  if(tab==='custom'){
+    const txt=_shellTerm?_shellTerm.getSelection():'';
+    if(!txt.trim()){ toast('Nothing to copy','Select text in the terminal first.','warn'); return; }
+    navigator.clipboard.writeText(txt).then(()=>toast('Copied','Selection copied to clipboard.','ok'),()=>toast('Copy failed','Clipboard access denied.','error'));
+    return;
+  }
   let txt='';
   if(tab==='yaml') txt=S.yamlEditMode?document.getElementById('yaml-edit').value:document.getElementById('yaml-output').textContent;
-  else { const ids={output:'pane-output',logs:'log-output',custom:'custom-output'}; const id=ids[tab]; if(id) txt=document.getElementById(id).textContent; }
+  else { const ids={output:'pane-output',logs:'log-output'}; const id=ids[tab]; if(id) txt=document.getElementById(id).textContent; }
   if(!txt.trim()){ toast('Nothing to copy','The pane is empty.','warn'); return; }
   navigator.clipboard.writeText(txt).then(()=>toast('Copied','Output copied to clipboard.','ok'),()=>toast('Copy failed','Clipboard access denied.','error'));
 }
@@ -1505,6 +1604,10 @@ function switchTab(name){
     document.getElementById(`tab-${t}`)?.classList.toggle('active',t===name);
   });
   if(name==='portforward') loadPortForwards();
+  if(name==='custom' && _shellFit){
+    // refit after the pane becomes visible so xterm measures the correct size
+    requestAnimationFrame(()=>{ try{ _shellFit.fit(); _sendResize(); }catch(_){} });
+  }
 }
 function currentTab(){ for(const t of ALL_TABS){ const p=document.getElementById(`pane-${t}`); if(p&&p.style.display!=='none') return t; } return 'output'; }
 
