@@ -14,7 +14,7 @@ import subprocess, sys
 PIP_INDEX_URL = ""   # leave empty to use the default public PyPI
 
 # ─── Auto-install dependencies before anything else ────────────────────────────
-_REQUIRED = {"flask": "flask", "webview": "pywebview"}   # import_name → pip package name
+_REQUIRED = {"flask": "flask", "webview": "pywebview", "flask_sock": "flask-sock"}   # import_name → pip package name
 
 def _ensure_deps():
     missing = []
@@ -40,12 +40,14 @@ _ensure_deps()
 
 # ─── Imports (guaranteed present after _ensure_deps) ──────────────────────────
 from flask import Flask, render_template, jsonify, request, Response, stream_with_context
-import threading, queue, json, base64, os, time, shlex
+import threading, queue, json, base64, os, time, shlex, signal, struct
 import webview
+from flask_sock import Sock
 from datetime import datetime, timezone
 
 app = Flask(__name__)
 app.secret_key = os.urandom(24)
+sock = Sock(app)
 
 # ─── Paths ─────────────────────────────────────────────────────────────────────
 KUBECTL_CMD = os.environ.get("KUBECTL_CMD", "kubectl")
@@ -769,6 +771,146 @@ def unpin_namespace(name, ns):
     env["pinned_namespaces"] = pins
     _save_cfg(cfg)
     return jsonify(ok=True, pinned_namespaces=pins)
+
+
+# ─── WebSocket: interactive shell ─────────────────────────────────────────────
+
+def _pty_set_size(fd, rows, cols):
+    """Resize a Unix PTY to the given dimensions."""
+    try:
+        import fcntl, termios
+        winsize = struct.pack("HHHH", rows, cols, 0, 0)
+        fcntl.ioctl(fd, termios.TIOCSWINSZ, winsize)
+    except Exception:
+        pass
+
+
+@sock.route("/ws/shell")
+def shell_ws(ws):
+    """Full interactive shell over WebSocket.
+    Input protocol:
+        !resize:ROWS:COLS  — resize the PTY
+        everything else    — raw stdin to the shell
+    """
+    shell_choice = request.args.get("shell", "").strip()
+
+    if sys.platform == "win32":
+        if shell_choice == "cmd":
+            cmd = ["cmd.exe"]
+        else:
+            cmd = ["powershell.exe", "-NoLogo", "-NoExit"]
+    else:
+        shells = {
+            "bash": "/bin/bash",
+            "zsh":  "/bin/zsh",
+            "sh":   "/bin/sh",
+        }
+        chosen = shells.get(shell_choice)
+        if chosen and os.path.isfile(chosen):
+            cmd = [chosen, "--login"]
+        else:
+            cmd = [os.environ.get("SHELL", "/bin/bash"), "--login"]
+
+    if sys.platform == "win32":
+        # ── Windows: subprocess pipes (no PTY available without extra deps) ──
+        proc = subprocess.Popen(
+            cmd,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=False,
+            **_win_flags(),
+        )
+
+        def _read_win():
+            while proc.poll() is None:
+                chunk = proc.stdout.read(512)
+                if not chunk:
+                    break
+                try:
+                    ws.send(chunk.decode("utf-8", errors="replace"))
+                except Exception:
+                    break
+
+        threading.Thread(target=_read_win, daemon=True).start()
+
+        while True:
+            try:
+                data = ws.receive(timeout=60)
+                if data is None:
+                    break
+                if isinstance(data, str) and data.startswith("!resize:"):
+                    continue  # PTY resize not supported on Windows pipes
+                raw = data.encode() if isinstance(data, str) else data
+                proc.stdin.write(raw)
+                proc.stdin.flush()
+            except Exception:
+                break
+
+        try:
+            proc.kill()
+        except Exception:
+            pass
+
+    else:
+        # ── Unix/macOS: real PTY ──────────────────────────────────────────────
+        import pty, select as _select
+
+        master, slave = pty.openpty()
+        _pty_set_size(master, 40, 200)  # initial generous size
+
+        proc = subprocess.Popen(
+            cmd,
+            stdin=slave,
+            stdout=slave,
+            stderr=slave,
+            preexec_fn=os.setsid,
+            close_fds=True,
+        )
+        os.close(slave)
+
+        def _read_unix():
+            while True:
+                try:
+                    r, _, _ = _select.select([master], [], [], 0.05)
+                    if r:
+                        chunk = os.read(master, 4096)
+                        if not chunk:
+                            break
+                        try:
+                            ws.send(chunk.decode("latin-1"))
+                        except Exception:
+                            break
+                    elif proc.poll() is not None:
+                        break
+                except Exception:
+                    break
+
+        threading.Thread(target=_read_unix, daemon=True).start()
+
+        while True:
+            try:
+                data = ws.receive(timeout=60)
+                if data is None:
+                    break
+                if isinstance(data, str) and data.startswith("!resize:"):
+                    _, rows, cols = data.split(":")
+                    _pty_set_size(master, int(rows), int(cols))
+                    continue
+                raw = data.encode("latin-1") if isinstance(data, str) else data
+                os.write(master, raw)
+            except Exception as exc:
+                if "timeout" not in str(exc).lower():
+                    break
+
+        try:
+            os.kill(proc.pid, signal.SIGTERM)
+        except Exception:
+            pass
+        try:
+            os.close(master)
+        except Exception:
+            pass
 
 
 # ─── Entry point ───────────────────────────────────────────────────────────────
