@@ -839,7 +839,6 @@ document.addEventListener('DOMContentLoaded', async () => {
   await loadEnvList();
   startSessionPoll();
   loadContexts();
-  renderHistoryList();
 });
 
 // ── Config / environments ─────────────────────────────────────────────────────
@@ -1347,15 +1346,14 @@ function _initShellTerm(){
   _shellFit = new FitAddon.FitAddon();
   _shellTerm.loadAddon(_shellFit);
   _shellTerm.open(document.getElementById('shell-term'));
-  _shellFit.fit();
+  // Delay fit like the exec terminal modal does — element needs layout pass first
+  setTimeout(() => { try { _shellFit.fit(); } catch(_){} }, 100);
 
-  // Send all keystrokes to server
   _shellTerm.onData(data => {
     if(_shellSock && _shellSock.readyState===WebSocket.OPEN)
       _shellSock.send(data);
   });
 
-  // Right-click: paste from clipboard
   document.getElementById('shell-term').addEventListener('contextmenu', async e => {
     e.preventDefault();
     try {
@@ -1365,12 +1363,8 @@ function _initShellTerm(){
     } catch(_){}
   });
 
-  // Refit when panel is resized
   _shellResizeObs = new ResizeObserver(() => {
-    if(_shellFit) {
-      try { _shellFit.fit(); } catch(_){}
-      _sendResize();
-    }
+    if(_shellFit){ try { _shellFit.fit(); } catch(_){} _sendResize(); }
   });
   _shellResizeObs.observe(document.getElementById('shell-term'));
 }
@@ -1386,10 +1380,19 @@ function _setShellStatus(msg, color){
 }
 
 function shellConnect(){
-  _initShellTerm();
+  try { _initShellTerm(); }
+  catch(e){ toast('Shell init failed', String(e), 'error'); return; }
+
   const shell=document.getElementById('shell-selector').value;
-  const url=`ws://127.0.0.1:${location.port}/ws/shell?shell=${encodeURIComponent(shell)}`;
-  _shellSock = new WebSocket(url);
+  // Use location.host (hostname:port) — more reliable than location.port alone in pywebview
+  const wsProto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  const url=`${wsProto}//${location.host}/ws/shell?shell=${encodeURIComponent(shell)}`;
+  _setShellStatus('Connecting…', 'var(--warn-fg)');
+
+  let _shellSockLocal;
+  try { _shellSockLocal = new WebSocket(url); }
+  catch(e){ toast('WebSocket error', String(e), 'error'); _setShellStatus('Error','var(--err-fg)'); return; }
+  _shellSock = _shellSockLocal;
 
   _shellSock.onopen = () => {
     _setShellStatus('Connected', 'var(--ok-fg)');
@@ -1428,7 +1431,6 @@ function shellQuick(cmd){
 
 function shellClear(){
   if(_shellTerm) _shellTerm.clear();
-}
 }
 
 // ── Port Forwarding ───────────────────────────────────────────────────────────
