@@ -555,7 +555,7 @@ select.sel:focus { border-color: var(--input-focus); }
   <div id="resize-handle" title="Drag to resize"></div>
 
   <!-- Output panel -->
-  <div class="output-panel" id="output-panel" style="height:280px">
+  <div class="output-panel" id="output-panel" style="height:380px">
     <div class="tab-bar">
       <button class="tab-btn active" onclick="switchTab('output')"      id="tab-output">Output</button>
       <button class="tab-btn"        onclick="switchTab('logs')"        id="tab-logs">Live Logs</button>
@@ -1346,8 +1346,8 @@ function _initShellTerm(){
   _shellFit = new FitAddon.FitAddon();
   _shellTerm.loadAddon(_shellFit);
   _shellTerm.open(document.getElementById('shell-term'));
-  // Delay fit like the exec terminal modal does — element needs layout pass first
-  setTimeout(() => { try { _shellFit.fit(); } catch(_){} }, 100);
+  // Delay fit so the element has a layout pass; then sync the PTY size
+  setTimeout(() => { try { _shellFit.fit(); _sendResize(); } catch(_){} }, 150);
 
   _shellTerm.onData(data => {
     if(_shellSock && _shellSock.readyState===WebSocket.OPEN)
@@ -1379,12 +1379,26 @@ function _setShellStatus(msg, color){
   if(el){ el.textContent=msg; el.style.color=color||'var(--text3)'; }
 }
 
+let _shellRafTimer = null;
+
+function _startRafKeepAlive(){
+  // WKWebView throttles requestAnimationFrame when idle; drive it via setInterval
+  // so xterm.js renders PTY output in real-time without needing user interaction
+  if(_shellRafTimer) return;
+  _shellRafTimer = setInterval(() => requestAnimationFrame(() => {}), 50);
+}
+function _stopRafKeepAlive(){
+  if(_shellRafTimer){ clearInterval(_shellRafTimer); _shellRafTimer=null; }
+}
+
 function shellConnect(){
   try { _initShellTerm(); }
   catch(e){ toast('Shell init failed', String(e), 'error'); return; }
 
+  // Fit synchronously now (user is on the custom tab, element is visible)
+  try { _shellFit.fit(); } catch(_){}
+
   const shell=document.getElementById('shell-selector').value;
-  // Use location.host (hostname:port) — more reliable than location.port alone in pywebview
   const wsProto = location.protocol === 'https:' ? 'wss:' : 'ws:';
   const url=`${wsProto}//${location.host}/ws/shell?shell=${encodeURIComponent(shell)}`;
   _setShellStatus('Connecting…', 'var(--warn-fg)');
@@ -1399,7 +1413,9 @@ function shellConnect(){
     document.getElementById('btn-shell-connect').disabled=true;
     document.getElementById('btn-shell-disconnect').disabled=false;
     _shellTerm.focus();
-    _sendResize();
+    // Delay resize: fit() may still be settling; send after 200 ms for accurate dims
+    setTimeout(() => { try { _shellFit.fit(); } catch(_){} _sendResize(); }, 200);
+    _startRafKeepAlive();
   };
   _shellSock.onmessage = e => {
     if(_shellTerm) _shellTerm.write(e.data);
@@ -1418,6 +1434,7 @@ function shellConnect(){
 
 function shellDisconnect(){
   if(_shellSock){ _shellSock.close(); _shellSock=null; }
+  _stopRafKeepAlive();
 }
 
 function shellQuick(cmd){
