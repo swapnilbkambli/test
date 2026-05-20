@@ -876,7 +876,7 @@ def shell_ws(ws):
         import pty, select as _select
 
         master, slave = pty.openpty()
-        _pty_set_size(master, 40, 200)
+        _pty_set_size(master, 24, 80)   # match xterm.js defaults; JS sends correct size on connect
 
         env = os.environ.copy()
         env.setdefault("TERM", "xterm-256color")
