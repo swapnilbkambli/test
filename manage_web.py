@@ -791,6 +791,12 @@ def shell_ws(ws):
     Input protocol:
         !resize:ROWS:COLS  — resize the PTY
         everything else    — raw stdin to the shell
+
+    Architecture: flask-sock/simple_websocket is NOT thread-safe for concurrent
+    send+receive from different threads.  We solve this by keeping ws.send()
+    exclusively on the main thread and running ws.receive() in a side thread
+    that puts data into an input queue.  The main thread multiplexes the PTY
+    fd (via select) with the input queue, so it is the only caller of ws.send().
     """
     shell_choice = request.args.get("shell", "").strip()
 
@@ -800,117 +806,130 @@ def shell_ws(ws):
         else:
             cmd = ["powershell.exe", "-NoLogo", "-NoExit"]
     else:
-        shells = {
-            "bash": "/bin/bash",
-            "zsh":  "/bin/zsh",
-            "sh":   "/bin/sh",
-        }
+        shells = {"bash": "/bin/bash", "zsh": "/bin/zsh", "sh": "/bin/sh"}
         chosen = shells.get(shell_choice)
         if chosen and os.path.isfile(chosen):
             cmd = [chosen, "--login"]
         else:
             cmd = [os.environ.get("SHELL", "/bin/bash"), "--login"]
 
+    # ── shared: input queue and stop event ────────────────────────────────────
+    inp_q   = queue.Queue()   # browser → shell
+    stopped = threading.Event()
+
+    def _ws_receiver():
+        """Side thread: only calls ws.receive() and feeds inp_q."""
+        while not stopped.is_set():
+            try:
+                data = ws.receive(timeout=5)
+                if data is None:
+                    continue   # idle timeout — no data, keep waiting
+                inp_q.put(data)
+            except Exception:
+                stopped.set()
+                break
+
+    threading.Thread(target=_ws_receiver, daemon=True).start()
+
     if sys.platform == "win32":
-        # ── Windows: subprocess pipes (no PTY available without extra deps) ──
+        # ── Windows: subprocess pipes ─────────────────────────────────────────
         proc = subprocess.Popen(
             cmd,
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=False,
-            **_win_flags(),
+            stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT, text=False, **_win_flags(),
         )
 
-        def _read_win():
+        def _win_reader():
             while proc.poll() is None:
                 chunk = proc.stdout.read(512)
                 if not chunk:
                     break
+                inp_q.put(("__pty__", chunk))   # tagged tuple = PTY output
+            stopped.set()
+
+        threading.Thread(target=_win_reader, daemon=True).start()
+
+        while not stopped.is_set():
+            try:
+                item = inp_q.get(timeout=0.05)
+            except Exception:
+                continue
+            if isinstance(item, tuple) and item[0] == "__pty__":
                 try:
-                    ws.send(chunk.decode("utf-8", errors="replace"))
+                    ws.send(item[1].decode("utf-8", errors="replace"))
                 except Exception:
                     break
+            else:
+                if not item.startswith("!resize:"):
+                    try:
+                        proc.stdin.write(item.encode() if isinstance(item, str) else item)
+                        proc.stdin.flush()
+                    except Exception:
+                        break
 
-        threading.Thread(target=_read_win, daemon=True).start()
-
-        while True:
-            try:
-                data = ws.receive(timeout=60)
-                if data is None:
-                    break
-                if isinstance(data, str) and data.startswith("!resize:"):
-                    continue  # PTY resize not supported on Windows pipes
-                raw = data.encode() if isinstance(data, str) else data
-                proc.stdin.write(raw)
-                proc.stdin.flush()
-            except Exception:
-                break
-
-        try:
-            proc.kill()
-        except Exception:
-            pass
+        stopped.set()
+        try: proc.kill()
+        except Exception: pass
 
     else:
         # ── Unix/macOS: real PTY ──────────────────────────────────────────────
         import pty, select as _select
 
         master, slave = pty.openpty()
-        _pty_set_size(master, 40, 200)  # initial generous size
+        _pty_set_size(master, 40, 200)
 
+        env = os.environ.copy()
+        env.setdefault("TERM", "xterm-256color")
+        env.setdefault("COLORTERM", "truecolor")
         proc = subprocess.Popen(
             cmd,
-            stdin=slave,
-            stdout=slave,
-            stderr=slave,
-            preexec_fn=os.setsid,
-            close_fds=True,
+            stdin=slave, stdout=slave, stderr=slave,
+            preexec_fn=os.setsid, close_fds=True,
+            env=env,
         )
         os.close(slave)
 
-        def _read_unix():
-            while True:
+        while not stopped.is_set():
+            # Check PTY for output (short timeout so we stay responsive)
+            try:
+                r, _, _ = _select.select([master], [], [], 0.02)
+            except Exception:
+                break
+            if r:
                 try:
-                    r, _, _ = _select.select([master], [], [], 0.05)
-                    if r:
-                        chunk = os.read(master, 4096)
-                        if not chunk:
-                            break
-                        try:
-                            ws.send(chunk.decode("latin-1"))
-                        except Exception:
-                            break
-                    elif proc.poll() is not None:
+                    chunk = os.read(master, 4096)
+                    if not chunk:
                         break
+                    ws.send(chunk.decode("latin-1"))   # only send from this thread
                 except Exception:
                     break
 
-        threading.Thread(target=_read_unix, daemon=True).start()
-
-        while True:
-            try:
-                data = ws.receive(timeout=60)
-                if data is None:
+            # Forward any pending browser input to the PTY
+            while not inp_q.empty():
+                try:
+                    data = inp_q.get_nowait()
+                except Exception:
                     break
                 if isinstance(data, str) and data.startswith("!resize:"):
-                    _, rows, cols = data.split(":")
-                    _pty_set_size(master, int(rows), int(cols))
-                    continue
-                raw = data.encode("latin-1") if isinstance(data, str) else data
-                os.write(master, raw)
-            except Exception as exc:
-                if "timeout" not in str(exc).lower():
-                    break
+                    try:
+                        _, rows, cols = data.split(":")
+                        _pty_set_size(master, int(rows), int(cols))
+                    except Exception:
+                        pass
+                else:
+                    try:
+                        os.write(master, data.encode("latin-1") if isinstance(data, str) else data)
+                    except Exception:
+                        break
 
-        try:
-            os.kill(proc.pid, signal.SIGTERM)
-        except Exception:
-            pass
-        try:
-            os.close(master)
-        except Exception:
-            pass
+            if proc.poll() is not None:
+                break
+
+        stopped.set()
+        try: os.kill(proc.pid, signal.SIGTERM)
+        except Exception: pass
+        try: os.close(master)
+        except Exception: pass
 
 
 # ─── Entry point ───────────────────────────────────────────────────────────────
