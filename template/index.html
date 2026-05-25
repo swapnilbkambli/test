@@ -1213,6 +1213,10 @@
         Ingress</button>
       <button class="vtab-btn" id="vtab-crds" onclick="switchMainTab('crds');loadCrds()">&#128055; CRDs</button>
       <button class="vtab-btn" id="vtab-jobs" onclick="switchMainTab('jobs');loadJobsPanel()">&#9881; Jobs</button>
+      <div class="vtab-sep"></div>
+      <div class="vtab-section">Policy</div>
+      <button class="vtab-btn" id="vtab-netpol" onclick="switchMainTab('netpol');loadNetpolicies()">&#128737; Net Policies</button>
+      <button class="vtab-btn" id="vtab-compliance" onclick="switchMainTab('compliance')">&#10003;&#10003; Compliance</button>
     </div>
 
     <!-- Right content area -->
@@ -1365,8 +1369,9 @@
               <button onclick="downloadLogs()" class="btn btn-sm">⬇ Download</button>
               <button onclick="clearLogs()"
                 style="font-size:11px;color:var(--text3);background:none;border:none;cursor:pointer">Clear</button>
+              <span style="font-size:10px;color:var(--text3);margin-left:auto">Select → copy</span>
               <button id="btn-logs-fs" onclick="panelFullscreen('pane-logs')" title="Full screen"
-                style="font-size:14px;padding:2px 8px;background:none;border:1px solid var(--border);border-radius:4px;color:var(--text3);cursor:pointer;margin-left:auto;line-height:1">&#x26F6;</button>
+                style="font-size:14px;padding:2px 8px;background:none;border:1px solid var(--border);border-radius:4px;color:var(--text3);cursor:pointer;line-height:1">&#x26F6;</button>
             </div>
             <div id="log-output" class="terminal" style="flex:1;overflow-y:scroll"></div>
           </div>
@@ -1513,6 +1518,12 @@
                   Summary</div>
                 <div id="hc-summary" class="coll-body">
                   <div id="health-cards" style="display:flex;gap:10px;flex-wrap:wrap"></div>
+                </div>
+              </div>
+              <div class="coll-card">
+                <div class="coll-hdr" onclick="_coll('hc-quota-snap')"><span class="coll-arrow">&#x25B6;</span>&ensp;&#128202; Quota Utilisation<span id="hc-quota-snap-ct" style="font-weight:400;color:var(--text3)"></span></div>
+                <div id="hc-quota-snap" class="coll-body" style="display:none">
+                  <div id="health-quota-snap"></div>
                 </div>
               </div>
               <div class="coll-card">
@@ -1719,6 +1730,40 @@
             <div id="crd-content" style="flex:1;overflow:auto;padding:12px;background:var(--bg)">
               <p style="color:var(--text3);font-size:13px">Click the CRDs tab to load installed Custom Resource
                 Definitions.</p>
+            </div>
+          </div>
+
+          <!-- Network Policies Panel -->
+          <div id="pane-netpol" style="display:none;flex-direction:column;flex:1;overflow:hidden">
+            <div style="display:flex;align-items:center;gap:8px;padding:6px 10px;border-bottom:1px solid var(--border);flex-shrink:0;flex-wrap:wrap;background:var(--surface2)">
+              <span style="font-size:11px;font-weight:600;color:var(--text3)">NETWORK POLICIES</span>
+              <select id="netpol-ns-select" class="sel" style="min-width:170px" onchange="loadNetpolicies()"></select>
+              <label style="display:flex;align-items:center;gap:5px;font-size:12px;color:var(--text2);cursor:pointer">
+                <input type="checkbox" id="chk-netpol-allns" style="accent-color:var(--brand)" onchange="loadNetpolicies()" /> All NS
+              </label>
+              <button onclick="loadNetpolicies()" class="btn btn-sm">&#x27F3; Refresh</button>
+              <input type="text" class="inp inp-sm" style="width:160px" placeholder="&#128269; Filter&hellip;"
+                oninput="_filterRows(this.value,'netpol-content')" />
+              <span id="netpol-ts" style="font-size:11px;color:var(--text3);margin-left:auto"></span>
+            </div>
+            <div id="netpol-content" style="flex:1;overflow:auto;padding:12px;background:var(--bg)">
+              <p style="color:var(--text3);font-size:13px">Click the Net Policies tab to load NetworkPolicy objects.</p>
+            </div>
+          </div>
+
+          <!-- Compliance Checker Panel -->
+          <div id="pane-compliance" style="display:none;flex-direction:column;flex:1;overflow:hidden">
+            <div style="display:flex;align-items:center;gap:8px;padding:6px 10px;border-bottom:1px solid var(--border);flex-shrink:0;flex-wrap:wrap;background:var(--surface2)">
+              <span style="font-size:11px;font-weight:600;color:var(--text3)">COMPLIANCE CHECKER</span>
+              <select id="compliance-ns-select" class="sel" style="min-width:170px"></select>
+              <button onclick="runCompliance()" class="btn btn-sm btn-brand">&#9654; Run Check</button>
+              <span id="compliance-score-badge" style="display:none;font-size:12px;font-weight:700;padding:2px 10px;border-radius:12px;margin-left:4px"></span>
+              <input type="text" class="inp inp-sm" style="width:160px" placeholder="&#128269; Filter&hellip;"
+                oninput="_filterRows(this.value,'compliance-content')" />
+              <span id="compliance-ts" style="font-size:11px;color:var(--text3);margin-left:auto"></span>
+            </div>
+            <div id="compliance-content" style="flex:1;overflow:auto;padding:12px;background:var(--bg)">
+              <p style="color:var(--text3);font-size:13px">Select a namespace and click <strong>Run Check</strong> to audit compliance.</p>
             </div>
           </div>
 
@@ -2010,6 +2055,13 @@
         const txt = sel ? sel.toString() : '';
         if (txt && txt.trim()) _clipWrite(txt);
       });
+
+      // Logs tab: same select-to-copy behaviour
+      document.getElementById('log-output').addEventListener('mouseup', () => {
+        const sel = window.getSelection();
+        const txt = sel ? sel.toString() : '';
+        if (txt && txt.trim()) _clipWrite(txt);
+      });
     });
 
     // ── Config / environments ─────────────────────────────────────────────────────
@@ -2182,7 +2234,8 @@
     function _clearAllNsDropdowns() {
       const loading = '<option value="" disabled selected>Loading…</option>';
       for (const id of ['ns-select', 'health-ns-select', 'topo-ns-select',
-        'hpa-ns-select', 'ingress-ns-select', 'crd-ns-select', 'jobs-ns-select']) {
+        'hpa-ns-select', 'ingress-ns-select', 'crd-ns-select', 'jobs-ns-select',
+        'netpol-ns-select', 'compliance-ns-select']) {
         const el = document.getElementById(id);
         if (el) el.innerHTML = loading;
       }
@@ -2254,7 +2307,8 @@
 
       _fillSel(document.getElementById('health-ns-select'), true);
       _fillSel(document.getElementById('topo-ns-select'), true);
-      for (const sid of ['hpa-ns-select', 'ingress-ns-select', 'crd-ns-select', 'jobs-ns-select']) {
+      for (const sid of ['hpa-ns-select', 'ingress-ns-select', 'crd-ns-select', 'jobs-ns-select',
+                          'netpol-ns-select', 'compliance-ns-select']) {
         _fillSel(document.getElementById(sid), true);
       }
       // reloadNs always hides its own overlay; callers that want two-phase progress
@@ -2267,7 +2321,8 @@
       document.getElementById('search-input').value = '';
       // Fix #11: sync all other namespace dropdowns to the newly selected value
       for (const id of ['health-ns-select', 'topo-ns-select', 'hpa-ns-select',
-                        'ingress-ns-select', 'crd-ns-select', 'jobs-ns-select']) {
+                        'ingress-ns-select', 'crd-ns-select', 'jobs-ns-select',
+                        'netpol-ns-select', 'compliance-ns-select']) {
         const el = document.getElementById(id);
         if (el && [...el.options].some(o => o.value === S.namespace)) el.value = S.namespace;
       }
@@ -2327,9 +2382,9 @@
       S.namespace = document.getElementById('ns-select').value;
       S.allNs = document.getElementById('chk-allns').checked;
       S.selected.clear(); updateActionBtns();
-      // Fix #13: keep nav namespace chip in sync
+      // Fix #13: keep nav namespace chip in sync; show "All NS" when all-namespaces mode
       const navNs = document.getElementById('nav-ns');
-      if (navNs) navNs.textContent = S.namespace;
+      if (navNs) navNs.textContent = S.allNs ? 'All NS' : S.namespace;
       // Fix #15: remember last-used resource type per environment
       if (S.activeEnv) localStorage.setItem(`ske_res_${S.activeEnv}`, S.resource);
       const params = new URLSearchParams({ type: S.resource, namespace: S.namespace, all: S.allNs });
@@ -3040,6 +3095,8 @@
       const hns = document.getElementById('health-ns-select');
       const ns = hns?.value || S.namespace;
       const all = document.getElementById('chk-health-allns')?.checked || false;
+      showProcessingOverlay('Loading Health…');
+      try {
       const r = await fetch(`/api/health?namespace=${encodeURIComponent(ns)}&all=${all}`), d = await r.json();
       document.getElementById('health-ts').textContent = `Updated ${new Date().toLocaleTimeString()}`;
       if (!d.ok) { document.getElementById('health-cards').innerHTML = `<p style="color:var(--err-fg);font-size:12px">${escHtml(d.error)}</p>`; return; }
@@ -3186,7 +3243,14 @@
         }
       }
       updateAlertBadge(d.alerts);
+      _renderHealthQuotaSnap(d.quota_snapshot || [], all);
       _loadTriageSections();
+      } catch(e) {
+        document.getElementById('health-cards').innerHTML = `<p style="color:var(--err-fg);font-size:12px">Error loading health: ${escHtml(String(e))}</p>`;
+        document.getElementById('health-ts').textContent = 'Error';
+      } finally {
+        hideProcessingOverlay();
+      }
     }
     function updateAlertBadge(alerts) {
       const b = document.getElementById('alert-badge');
@@ -3305,6 +3369,8 @@
       content.innerHTML = '<p style="color:var(--text3);font-size:13px">Loading\u2026</p>';
       const ns = document.getElementById('topo-ns-select')?.value || S.namespace;
       const all = document.getElementById('chk-topo-allns')?.checked || false;
+      showProcessingOverlay('Loading Topology\u2026');
+      try {
       const r = await fetch(`/api/topology?namespace=${encodeURIComponent(ns)}&all=${all}`), d = await r.json();
       if (!d.ok) { content.innerHTML = `<p style="color:var(--err-fg);font-size:12px">${escHtml(d.error)}</p>`; return; }
       if (!d.topology.length) { content.innerHTML = '<p style="color:var(--text3);font-size:13px">No deployments or pods found.</p>'; return; }
@@ -3340,6 +3406,11 @@
     </div>`;
       }).join('');
       _filterRows(document.querySelector('#pane-topology input[placeholder*="Filter"]')?.value || '', 'topology-content');
+      } catch(e) {
+        content.innerHTML = `<p style="color:var(--err-fg);font-size:12px">Error loading topology: ${escHtml(String(e))}</p>`;
+      } finally {
+        hideProcessingOverlay();
+      }
     }
 
     // ── Topology actions ─────────────────────────────────────────────────────────
@@ -3424,6 +3495,7 @@
         return;
       }
       content.innerHTML = '<p style="color:var(--text3);font-size:13px">Loading…</p>';
+      showProcessingOverlay('Loading Quota…');
       try {
         const params = new URLSearchParams({ namespaces: namespaces.join(','), stale_hours: staleHours });
         const r = await fetch(`/api/quota?${params}`), d = await r.json();
@@ -3435,6 +3507,8 @@
         _renderQuota();
       } catch (e) {
         content.innerHTML = `<p style="color:var(--err-fg);font-size:12px">Error: ${escHtml(String(e))}</p>`;
+      } finally {
+        hideProcessingOverlay();
       }
     }
 
@@ -3705,7 +3779,7 @@
 
     // ── Tabs ──────────────────────────────────────────────────────────────────────
     const ALL_TABS = ['output', 'logs', 'custom', 'yaml', 'portforward'];
-    const FULL_PANES = ['health', 'topology', 'quota', 'hpa', 'ingress', 'crds', 'jobs'];
+    const FULL_PANES = ['health', 'topology', 'quota', 'hpa', 'ingress', 'crds', 'jobs', 'netpol', 'compliance'];
     const BLOCK_PANES = new Set(); // all panes use flex layout
     // ── Main tab (left sidebar) ───────────────────────────────────────────────────
     function switchMainTab(name) {
@@ -3869,6 +3943,8 @@
       content.innerHTML = '<p style="color:var(--text3);font-size:13px">Loading…</p>';
       const ns = document.getElementById('hpa-ns-select')?.value || S.namespace;
       const all = document.getElementById('chk-hpa-allns')?.checked || false;
+      showProcessingOverlay('Loading HPAs…');
+      try {
       const r = await fetch(`/api/hpa?namespace=${encodeURIComponent(ns)}&all=${all}`);
       const d = await r.json();
       document.getElementById('hpa-ts').textContent = `Updated ${new Date().toLocaleTimeString()}`;
@@ -3904,6 +3980,12 @@
       html += `</tbody></table>`;
       content.innerHTML = html;
       _filterRows(document.querySelector('#pane-hpa input[placeholder*="Filter"]')?.value || '', 'hpa-content');
+      } catch(e) {
+        content.innerHTML = `<p style="color:var(--err-fg);font-size:12px">Error loading HPAs: ${escHtml(String(e))}</p>`;
+        document.getElementById('hpa-ts').textContent = 'Error';
+      } finally {
+        hideProcessingOverlay();
+      }
     }
 
     // ── HPA actions ───────────────────────────────────────────────────────────────
@@ -3972,6 +4054,8 @@
       content.innerHTML = '<p style="color:var(--text3);font-size:13px">Loading…</p>';
       const ns = document.getElementById('ingress-ns-select')?.value || S.namespace;
       const all = document.getElementById('chk-ingress-allns')?.checked || false;
+      showProcessingOverlay('Loading Ingresses…');
+      try {
       const r = await fetch(`/api/ingresses?namespace=${encodeURIComponent(ns)}&all=${all}`);
       const d = await r.json();
       document.getElementById('ingress-ts').textContent = `Updated ${new Date().toLocaleTimeString()}`;
@@ -4020,6 +4104,12 @@
       }
       content.innerHTML = html;
       _filterRows(document.querySelector('#pane-ingress input[placeholder*="Filter"]')?.value || '', 'ingress-content');
+      } catch(e) {
+        content.innerHTML = `<p style="color:var(--err-fg);font-size:12px">Error loading ingresses: ${escHtml(String(e))}</p>`;
+        document.getElementById('ingress-ts').textContent = 'Error';
+      } finally {
+        hideProcessingOverlay();
+      }
     }
 
     // ── Ingress actions ───────────────────────────────────────────────────────────
@@ -4083,16 +4173,23 @@
       content.innerHTML = '<p style="color:var(--text3);font-size:13px">Loading instances…</p>';
       const ns = document.getElementById('crd-ns-select')?.value || S.namespace;
       const all = document.getElementById('chk-crd-allns')?.checked || false;
-      const params = new URLSearchParams({ crd: plural, namespace: ns, all, scope: crd.scope || 'Namespaced' });
-      const r = await fetch(`/api/crd-instances?${params}`), d = await r.json();
-      if (!d.ok) { content.innerHTML = `<p style="color:var(--err-fg);font-size:12px">${escHtml(d.error)}</p>`; return; }
-      if (!d.rows || !d.rows.length) { content.innerHTML = `<p style="color:var(--text3);font-size:13px">No <strong>${escHtml(plural)}</strong> instances found.</p>`; return; }
-      let html = `<table class="res-table"><thead><tr>${d.headers.map(h => `<th>${escHtml(h)}</th>`).join('')}</tr></thead><tbody>`;
-      for (const row of d.rows)
-        html += `<tr>${row.cells.map(c => `<td>${escHtml(c)}</td>`).join('')}</tr>`;
-      html += `</tbody></table>`;
-      content.innerHTML = html;
-      _filterRows(document.querySelector('#pane-crds input[placeholder*="Filter"]')?.value || '', 'crd-content');
+      showProcessingOverlay('Loading CRD instances…');
+      try {
+        const params = new URLSearchParams({ crd: plural, namespace: ns, all, scope: crd.scope || 'Namespaced' });
+        const r = await fetch(`/api/crd-instances?${params}`), d = await r.json();
+        if (!d.ok) { content.innerHTML = `<p style="color:var(--err-fg);font-size:12px">${escHtml(d.error)}</p>`; return; }
+        if (!d.rows || !d.rows.length) { content.innerHTML = `<p style="color:var(--text3);font-size:13px">No <strong>${escHtml(plural)}</strong> instances found.</p>`; return; }
+        let html = `<table class="res-table"><thead><tr>${d.headers.map(h => `<th>${escHtml(h)}</th>`).join('')}</tr></thead><tbody>`;
+        for (const row of d.rows)
+          html += `<tr>${row.cells.map(c => `<td>${escHtml(c)}</td>`).join('')}</tr>`;
+        html += `</tbody></table>`;
+        content.innerHTML = html;
+        _filterRows(document.querySelector('#pane-crds input[placeholder*="Filter"]')?.value || '', 'crd-content');
+      } catch(e) {
+        content.innerHTML = `<p style="color:var(--err-fg);font-size:12px">Error loading CRD instances: ${escHtml(String(e))}</p>`;
+      } finally {
+        hideProcessingOverlay();
+      }
     }
 
     // ── Jobs / CronJobs ───────────────────────────────────────────────────────────
@@ -4102,6 +4199,8 @@
       content.innerHTML = '<p style="color:var(--text3);font-size:13px">Loading…</p>';
       const ns = document.getElementById('jobs-ns-select')?.value || S.namespace;
       const all = document.getElementById('chk-jobs-allns')?.checked || false;
+      showProcessingOverlay('Loading Jobs…');
+      try {
       const r = await fetch(`/api/jobs-panel?namespace=${encodeURIComponent(ns)}&all=${all}`);
       const d = await r.json();
       document.getElementById('jobs-ts').textContent = `Updated ${new Date().toLocaleTimeString()}`;
@@ -4173,6 +4272,12 @@
       }
       content.innerHTML = html;
       _filterRows(document.querySelector('#pane-jobs input[placeholder*="Filter"]')?.value || '', 'jobs-content');
+      } catch(e) {
+        content.innerHTML = `<p style="color:var(--err-fg);font-size:12px">Error loading jobs: ${escHtml(String(e))}</p>`;
+        document.getElementById('jobs-ts').textContent = 'Error';
+      } finally {
+        hideProcessingOverlay();
+      }
     }
 
     // ── Jobs / CronJobs actions ───────────────────────────────────────────────────
@@ -4443,6 +4548,315 @@
     }
 
     function _esc(s) { return String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
+
+    // ══════════════════════════════════════════════════════════════════════════════
+    // ── Health: Quota Snapshot ────────────────────────────────────────────────────
+    // ══════════════════════════════════════════════════════════════════════════════
+
+    // Burn-rate history: [{ts, metrics: {key: pct}}]
+    let _quotaSnapHistory = [];
+    const _QUOTA_SNAP_MAX = 10;
+
+    function _parseK8sCpu(s) {
+      if (!s) return 0;
+      s = String(s).trim();
+      return s.endsWith('m') ? parseFloat(s) : parseFloat(s) * 1000; // normalise to millicores
+    }
+    function _parseK8sMem(s) {
+      if (!s) return 0;
+      s = String(s).trim();
+      const map = { Ki: 1024, Mi: 1048576, Gi: 1073741824, Ti: 1099511627776,
+                    k: 1000, M: 1e6, G: 1e9, T: 1e12 };
+      for (const [sfx, mult] of Object.entries(map))
+        if (s.endsWith(sfx)) return parseFloat(s) * mult;
+      return parseFloat(s) || 0;
+    }
+    function _fmtPct(used, hard, parseFn) {
+      const u = parseFn(used), h = parseFn(hard);
+      if (!h) return null;
+      return Math.min(100, Math.round(u / h * 100));
+    }
+
+    function _renderHealthQuotaSnap(quotaSnapshot, all_ns) {
+      const el    = document.getElementById('health-quota-snap');
+      const ctEl  = document.getElementById('hc-quota-snap-ct');
+      if (!el) return;
+      if (all_ns) {
+        el.innerHTML = '<p style="color:var(--text3);font-size:12px">Quota snapshot is not available in All-NS mode — select a single namespace.</p>';
+        if (ctEl) ctEl.textContent = '';
+        return;
+      }
+      if (!quotaSnapshot || !quotaSnapshot.length) {
+        el.innerHTML = '<p style="color:var(--text3);font-size:12px">&#9888; No ResourceQuota defined in this namespace.</p>';
+        if (ctEl) ctEl.textContent = ' — none';
+        return;
+      }
+
+      // Track history for burn-rate
+      const now = Date.now();
+      const nowMetrics = {};
+      const CPU_KEYS = ['requests.cpu', 'limits.cpu'];
+      const MEM_KEYS = ['requests.memory', 'limits.memory'];
+      for (const q of quotaSnapshot) {
+        for (const [k, hv] of Object.entries(q.hard || {})) {
+          const uv = (q.used || {})[k] || '0';
+          const isCpu = CPU_KEYS.includes(k);
+          const isMem = MEM_KEYS.includes(k);
+          if (isCpu || isMem) nowMetrics[k] = _fmtPct(uv, hv, isCpu ? _parseK8sCpu : _parseK8sMem);
+        }
+      }
+      _quotaSnapHistory.push({ ts: now, metrics: nowMetrics });
+      if (_quotaSnapHistory.length > _QUOTA_SNAP_MAX) _quotaSnapHistory.shift();
+
+      // Compute burn rate: pct/hour from oldest to newest if we have ≥ 2 points
+      const burnRates = {};
+      if (_quotaSnapHistory.length >= 2) {
+        const oldest = _quotaSnapHistory[0], newest = _quotaSnapHistory[_quotaSnapHistory.length - 1];
+        const hrs = (newest.ts - oldest.ts) / 3600000;
+        if (hrs > 0) {
+          for (const k of Object.keys(newest.metrics)) {
+            const a = oldest.metrics[k], b = newest.metrics[k];
+            if (a != null && b != null) burnRates[k] = (b - a) / hrs;
+          }
+        }
+      }
+
+      const barColor = pct => pct >= 90 ? 'var(--err-fg)' : pct >= 70 ? 'var(--warn-fg)' : 'var(--ok-fg)';
+      const trendArrow = rate => {
+        if (rate == null) return '';
+        const abs = Math.abs(rate);
+        if (abs < 0.5) return '<span style="color:var(--text3)" title="Stable">→</span>';
+        return rate > 0
+          ? `<span style="color:var(--err-fg)" title="Rising ~${abs.toFixed(1)}%/hr">↑</span>`
+          : `<span style="color:var(--ok-fg)" title="Falling ~${abs.toFixed(1)}%/hr">↓</span>`;
+      };
+      const etaLabel = (pct, rate) => {
+        if (!rate || rate <= 0 || pct == null) return '';
+        const hrsLeft = (100 - pct) / rate;
+        if (hrsLeft > 720) return '';
+        const label = hrsLeft < 2 ? `${Math.round(hrsLeft * 60)}m` : `${Math.round(hrsLeft)}h`;
+        return `<span style="color:var(--err-fg);font-size:10px;margin-left:6px" title="Estimated time to quota exhaustion">⏱ ~${label} to limit</span>`;
+      };
+
+      let html = '';
+      for (const q of quotaSnapshot) {
+        html += `<div style="margin-bottom:16px"><div style="font-size:11px;font-weight:700;color:var(--text3);text-transform:uppercase;letter-spacing:.04em;margin-bottom:8px">${escHtml(q.name)}</div>`;
+        const SHOW_KEYS = ['requests.cpu','limits.cpu','requests.memory','limits.memory','pods','persistentvolumeclaims','services'];
+        let anyShown = false;
+        for (const key of SHOW_KEYS) {
+          const hv = (q.hard || {})[key]; if (!hv) continue;
+          const uv = (q.used || {})[key] || '0';
+          const isCpu = key.includes('cpu'), isMem = key.includes('memory');
+          const pct = _fmtPct(uv, hv, isCpu ? _parseK8sCpu : (isMem ? _parseK8sMem : v => parseFloat(v)||0));
+          const rate = burnRates[key];
+          const col = pct != null ? barColor(pct) : 'var(--ok-fg)';
+          const label = key.replace('requests.','req. ').replace('limits.','lim. ').replace('persistentvolumeclaims','PVCs');
+          html += `<div style="display:grid;grid-template-columns:160px 1fr auto;align-items:center;gap:8px;margin-bottom:6px">
+            <span style="font-size:12px;color:var(--text2)">${escHtml(label)}</span>
+            <div style="background:var(--surface2);border-radius:4px;height:10px;overflow:hidden;position:relative">
+              ${pct != null ? `<div style="width:${pct}%;height:100%;background:${col};border-radius:4px;transition:width .3s"></div>` : ''}
+            </div>
+            <span style="font-size:11px;color:${col};white-space:nowrap;min-width:110px;text-align:right">
+              ${escHtml(uv)} / ${escHtml(hv)} ${pct != null ? `(${pct}%)` : ''} ${trendArrow(rate)} ${etaLabel(pct, rate)}
+            </span>
+          </div>`;
+          anyShown = true;
+        }
+        if (!anyShown) html += '<p style="color:var(--text3);font-size:12px">No standard quota keys found.</p>';
+        html += '</div>';
+      }
+      if (_quotaSnapHistory.length >= 2)
+        html += `<p style="font-size:10px;color:var(--text3);margin-top:4px">Burn rate computed from ${_quotaSnapHistory.length} snapshots over ${Math.round((_quotaSnapHistory[_quotaSnapHistory.length-1].ts - _quotaSnapHistory[0].ts)/60000)} min. Refresh to update.</p>`;
+      el.innerHTML = html;
+      if (ctEl) ctEl.textContent = ` — ${quotaSnapshot.length} quota(s)`;
+    }
+
+    // ══════════════════════════════════════════════════════════════════════════════
+    // ── Network Policies tab ──────────────────────────────────────────────────────
+    // ══════════════════════════════════════════════════════════════════════════════
+
+    async function loadNetpolicies() {
+      const content = document.getElementById('netpol-content');
+      content.innerHTML = '<p style="color:var(--text3);font-size:13px">Loading…</p>';
+      const ns  = document.getElementById('netpol-ns-select')?.value || S.namespace;
+      const all = document.getElementById('chk-netpol-allns')?.checked || false;
+      showProcessingOverlay('Loading Network Policies…');
+      try {
+        const r = await fetch(`/api/netpolicies?namespace=${encodeURIComponent(ns)}&all=${all}`);
+        const d = await r.json();
+        document.getElementById('netpol-ts').textContent = `Updated ${new Date().toLocaleTimeString()}`;
+        if (!d.ok) { content.innerHTML = `<p style="color:var(--err-fg);font-size:12px">${escHtml(d.error)}</p>`; return; }
+        if (!d.policies.length) {
+          content.innerHTML = `<div style="padding:16px;border:1px solid var(--warn-fg);border-radius:8px;background:var(--warn-bg,#3d2800);margin-bottom:12px">
+            <span style="color:var(--warn-fg);font-weight:600">&#9888; No NetworkPolicy found</span>
+            <p style="color:var(--text2);font-size:12px;margin:6px 0 0">Without a NetworkPolicy, all pod-to-pod traffic is allowed by default. Consider adding a default-deny policy and explicit allow rules.</p>
+          </div>`;
+          return;
+        }
+        let html = '';
+        for (const p of d.policies) {
+          const na = escAttr(JSON.stringify(p.name)), nsa = escAttr(JSON.stringify(p.namespace));
+          const types = p.policy_types.length ? p.policy_types.join(', ') : 'Ingress';
+          html += `<div style="border:1px solid var(--border);border-radius:8px;margin-bottom:14px;background:var(--surface);overflow:hidden">
+            <div style="background:var(--surface2);padding:8px 14px;display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+              <span style="font-weight:700;color:var(--brand)">&#128737; ${escHtml(p.name)}</span>
+              <span style="color:var(--text3);font-size:11px">${escHtml(p.namespace)}</span>
+              <span class="badge badge-blue" title="Applies to">Pods: ${escHtml(p.pod_selector)}</span>
+              ${p.policy_types.map(t => `<span class="badge ${t==='Ingress'?'badge-green':'badge-yellow'}">${escHtml(t)}</span>`).join('')}
+              <div style="margin-left:auto;display:flex;gap:6px">
+                <button class="btn btn-sm" onclick="netpolDescribe(${na},${nsa})">&#128269; Describe</button>
+                <button class="btn btn-sm" onclick="netpolYaml(${na},${nsa})">&#128196; YAML</button>
+                <button class="btn btn-sm btn-danger" onclick="netpolDelete(${na},${nsa})">&#128465; Delete</button>
+              </div>
+            </div>`;
+          if (p.ingress_rules.length) {
+            html += `<div style="padding:10px 14px;border-top:1px solid var(--border)">
+              <div style="font-size:11px;font-weight:600;color:var(--ok-fg);margin-bottom:6px">&#8595; INGRESS (${p.ingress_rules.length} rule${p.ingress_rules.length>1?'s':''})</div>
+              <table class="pf-table" style="font-size:11px"><thead><tr><th>From</th><th>Ports</th></tr></thead><tbody>
+              ${p.ingress_rules.map(r => `<tr>
+                <td style="font-family:Consolas,monospace;color:var(--text2)">${r.from.map(s=>escHtml(s)).join('<br>')}</td>
+                <td style="font-family:Consolas,monospace;color:var(--info-fg)">${r.ports.map(s=>escHtml(s)).join(', ')}</td>
+              </tr>`).join('')}
+              </tbody></table></div>`;
+          } else if (p.policy_types.includes('Ingress')) {
+            html += `<div style="padding:8px 14px;border-top:1px solid var(--border);font-size:11px;color:var(--err-fg)">&#8595; INGRESS: <strong>deny all</strong> (no rules — blocks all inbound traffic to selected pods)</div>`;
+          }
+          if (p.egress_rules.length) {
+            html += `<div style="padding:10px 14px;border-top:1px solid var(--border)">
+              <div style="font-size:11px;font-weight:600;color:var(--warn-fg);margin-bottom:6px">&#8593; EGRESS (${p.egress_rules.length} rule${p.egress_rules.length>1?'s':''})</div>
+              <table class="pf-table" style="font-size:11px"><thead><tr><th>To</th><th>Ports</th></tr></thead><tbody>
+              ${p.egress_rules.map(r => `<tr>
+                <td style="font-family:Consolas,monospace;color:var(--text2)">${r.to.map(s=>escHtml(s)).join('<br>')}</td>
+                <td style="font-family:Consolas,monospace;color:var(--info-fg)">${r.ports.map(s=>escHtml(s)).join(', ')}</td>
+              </tr>`).join('')}
+              </tbody></table></div>`;
+          } else if (p.policy_types.includes('Egress')) {
+            html += `<div style="padding:8px 14px;border-top:1px solid var(--border);font-size:11px;color:var(--err-fg)">&#8593; EGRESS: <strong>deny all</strong> (no rules — blocks all outbound traffic from selected pods)</div>`;
+          }
+          html += '</div>';
+        }
+        content.innerHTML = html;
+        _filterRows(document.querySelector('#pane-netpol input[placeholder*="Filter"]')?.value || '', 'netpol-content');
+      } catch(e) {
+        content.innerHTML = `<p style="color:var(--err-fg);font-size:12px">Error: ${escHtml(String(e))}</p>`;
+        document.getElementById('netpol-ts').textContent = 'Error';
+      } finally {
+        hideProcessingOverlay();
+      }
+    }
+
+    function netpolDescribe(name, ns) {
+      _healthShowPodModal('&#128737; kubectl describe networkpolicy', name, ns,
+        `/api/describe?type=networkpolicies&name=${encodeURIComponent(name)}&namespace=${encodeURIComponent(ns)}`);
+    }
+    async function netpolYaml(name, ns) {
+      switchMainTab('resources'); switchTab('yaml');
+      const p = new URLSearchParams({ type: 'networkpolicies', name, namespace: ns, all: 'false' });
+      const r = await fetch(`/api/yaml?${p}`), d = await r.json();
+      cancelYamlEdit(); document.getElementById('yaml-output').textContent = d.output;
+      document.getElementById('yaml-output').scrollTop = 0;
+    }
+    function netpolDelete(name, ns) {
+      showConfirm('Delete NetworkPolicy',
+        `Delete NetworkPolicy "${name}" in namespace "${ns}"?\n\nThis will remove traffic restrictions on matching pods immediately.\n\nThis cannot be undone.`,
+        'Delete', 'btn-danger',
+        async () => {
+          const r = await fetch('/api/delete', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ type: 'networkpolicies', names: [name], namespace: ns, all: false })
+          });
+          const d = await r.json(), res = d.results?.[0];
+          if (res?.ok) { toast('Deleted', `NetworkPolicy "${name}" deleted.`, 'ok'); loadNetpolicies(); }
+          else toast('Delete failed', res?.output || 'unknown error', 'error');
+        });
+    }
+
+    // ══════════════════════════════════════════════════════════════════════════════
+    // ── Compliance Checker tab ────────────────────────────────────────────────────
+    // ══════════════════════════════════════════════════════════════════════════════
+
+    async function runCompliance() {
+      const content = document.getElementById('compliance-content');
+      const ns = document.getElementById('compliance-ns-select')?.value || S.namespace;
+      content.innerHTML = '<p style="color:var(--text3);font-size:13px">Running checks…</p>';
+      const badge = document.getElementById('compliance-score-badge');
+      if (badge) badge.style.display = 'none';
+      showProcessingOverlay('Running compliance checks…');
+      try {
+        const r = await fetch(`/api/compliance?namespace=${encodeURIComponent(ns)}`);
+        const d = await r.json();
+        document.getElementById('compliance-ts').textContent = `Checked ${new Date().toLocaleTimeString()}`;
+        if (!d.ok) { content.innerHTML = `<p style="color:var(--err-fg);font-size:12px">${escHtml(d.error)}</p>`; return; }
+
+        // Score badge
+        if (badge) {
+          const pct = d.score;
+          badge.style.display = '';
+          badge.style.background = pct >= 90 ? 'var(--ok-bg)' : pct >= 60 ? 'var(--warn-bg,#3d2800)' : 'var(--err-bg)';
+          badge.style.color      = pct >= 90 ? 'var(--ok-fg)' : pct >= 60 ? 'var(--warn-fg)' : 'var(--err-fg)';
+          badge.textContent = `${d.passed}/${d.total} passed — ${d.score}%`;
+        }
+
+        // Group by category
+        const categories = {};
+        for (const c of d.checks) (categories[c.category] ??= []).push(c);
+        const catOrder = ['Security', 'Governance', 'Reliability', 'Operations'];
+        const sevColor = { critical:'var(--err-fg)', high:'var(--err-fg)', medium:'var(--warn-fg)', low:'var(--text3)' };
+        const sevBadge = { critical:'badge-red', high:'badge-red', medium:'badge-yellow', low:'badge-gray' };
+
+        let html = `<div style="margin-bottom:16px;padding:12px 16px;border-radius:8px;background:var(--surface2);display:flex;align-items:center;gap:14px;flex-wrap:wrap">
+          <span style="font-size:14px;font-weight:700;color:var(--text)">&#9875; ${escHtml(ns)}</span>
+          <span style="font-size:12px;color:var(--text3)">${d.checks.length} checks run</span>
+          <div style="display:flex;gap:6px;flex-wrap:wrap">
+            ${['critical','high','medium','low'].map(sev => {
+              const cnt = d.checks.filter(c => !c.passed && c.severity === sev).length;
+              return cnt ? `<span class="badge ${sevBadge[sev]}">${cnt} ${sev}</span>` : '';
+            }).join('')}
+            ${d.passed === d.total ? '<span class="badge badge-green">&#10003; All passed</span>' : ''}
+          </div>
+        </div>`;
+
+        for (const cat of [...catOrder, ...Object.keys(categories).filter(k => !catOrder.includes(k))]) {
+          const checks = categories[cat]; if (!checks) continue;
+          const failing = checks.filter(c => !c.passed).length;
+          html += `<div style="margin-bottom:20px">
+            <div style="font-size:11px;font-weight:700;color:var(--text3);text-transform:uppercase;letter-spacing:.05em;margin-bottom:8px;display:flex;align-items:center;gap:8px">
+              ${escHtml(cat)} <span style="font-weight:400">${failing ? `<span style="color:var(--err-fg)">${failing} failing</span>` : '<span style="color:var(--ok-fg)">all pass</span>'}</span>
+            </div>
+            <div style="display:flex;flex-direction:column;gap:6px">`;
+          for (const c of checks) {
+            const icon = c.passed ? '&#10003;' : '&#10007;';
+            const rowBg = c.passed ? '' : 'background:var(--err-bg,#2d0a0a);border-color:var(--err-fg)';
+            const iconColor = c.passed ? 'var(--ok-fg)' : 'var(--err-fg)';
+            html += `<div style="border:1px solid var(--border);border-radius:6px;padding:10px 14px;${rowBg}">
+              <div style="display:flex;align-items:flex-start;gap:10px">
+                <span style="font-size:16px;color:${iconColor};flex-shrink:0;line-height:1.2">${icon}</span>
+                <div style="flex:1;min-width:0">
+                  <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:4px">
+                    <span style="font-weight:600;color:var(--text)">${escHtml(c.name)}</span>
+                    <span class="badge ${sevBadge[c.severity]}">${escHtml(c.severity)}</span>
+                  </div>
+                  <div style="font-size:12px;color:var(--text2);margin-bottom:${c.passed ? 0 : 4}px">${escHtml(c.description)}</div>
+                  ${c.detail ? `<div style="font-size:11px;color:${c.passed?'var(--ok-fg)':'var(--err-fg)'};font-family:Consolas,monospace;margin-top:2px">${escHtml(c.detail)}</div>` : ''}
+                  ${!c.passed && c.remediation ? `<div style="margin-top:6px;padding:6px 10px;background:var(--surface2);border-radius:4px;font-size:11px">
+                    <span style="color:var(--text3)">&#128295; Fix: </span><code style="color:var(--brand)">${escHtml(c.remediation)}</code>
+                    <button class="btn btn-sm" style="padding:1px 6px;font-size:10px;margin-left:8px" onclick="_clipWrite(${escAttr(JSON.stringify(c.remediation))});toast('Copied','Remediation command copied.','ok')">&#128203;</button>
+                  </div>` : ''}
+                </div>
+              </div>
+            </div>`;
+          }
+          html += '</div></div>';
+        }
+        content.innerHTML = html;
+        _filterRows(document.querySelector('#pane-compliance input[placeholder*="Filter"]')?.value || '', 'compliance-content');
+      } catch(e) {
+        content.innerHTML = `<p style="color:var(--err-fg);font-size:12px">Error: ${escHtml(String(e))}</p>`;
+        document.getElementById('compliance-ts').textContent = 'Error';
+      } finally {
+        hideProcessingOverlay();
+      }
+    }
   </script>
   <div id="toast-container"></div>
 </body>
