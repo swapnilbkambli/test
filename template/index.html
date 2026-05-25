@@ -288,6 +288,54 @@
       background: var(--row-hover);
     }
 
+    /* ── Row status colouring ──────────────────────────────────────────────────── */
+    .res-table tbody tr.row-err > td {
+      background: rgba(185,28,28,0.055);
+    }
+    .res-table tbody tr.row-err.selected > td {
+      background: rgba(185,28,28,0.18) !important;
+    }
+    .res-table tbody tr.row-warn > td {
+      background: rgba(161,100,0,0.055);
+    }
+    .res-table tbody tr.row-warn.selected > td {
+      background: rgba(161,100,0,0.18) !important;
+    }
+    .dark .res-table tbody tr.row-err > td { background: rgba(248,113,113,0.08); }
+    .dark .res-table tbody tr.row-err.selected > td { background: rgba(248,113,113,0.22) !important; }
+    .dark .res-table tbody tr.row-warn > td { background: rgba(251,191,36,0.07); }
+    .dark .res-table tbody tr.row-warn.selected > td { background: rgba(251,191,36,0.20) !important; }
+
+    /* ── Cell click-to-copy feedback ─────────────────────────────────────────── */
+    .res-table tbody td {
+      cursor: pointer;
+      transition: outline 0.1s;
+    }
+    .res-table tbody td.cell-copied {
+      outline: 1px solid var(--brand);
+      outline-offset: -1px;
+    }
+
+    /* ── Pod quick-filter chips ───────────────────────────────────────────────── */
+    .pod-chip {
+      padding: 2px 10px;
+      font-size: 11px;
+      font-weight: 600;
+      border-radius: 999px;
+      border: 1px solid var(--border2);
+      background: var(--btn-bg);
+      color: var(--btn-fg);
+      cursor: pointer;
+      transition: background .12s, color .12s;
+      white-space: nowrap;
+    }
+    .pod-chip:hover { background: var(--surface3); }
+    .pod-chip.chip-active {
+      background: var(--brand);
+      color: var(--brand-fg);
+      border-color: var(--brand);
+    }
+
     /* ── Badges ────────────────────────────────────────────────────────────────── */
     .badge {
       display: inline-block;
@@ -1235,27 +1283,41 @@
 
         <span
           style="font-size:11px;font-weight:600;color:var(--text3);text-transform:uppercase;letter-spacing:.04em">Resource</span>
-        <select id="res-select" class="sel" style="min-width:140px" onchange="refresh()">
-          <option>pods</option>
-          <option>deployments</option>
-          <option>services</option>
-          <option>replicasets</option>
-          <option>statefulsets</option>
-          <option>daemonsets</option>
-          <option>configmaps</option>
-          <option>secrets</option>
-          <option>ingresses</option>
-          <option>persistentvolumeclaims</option>
-          <option>persistentvolumes</option>
-          <option>nodes</option>
-          <option>events</option>
-          <option>jobs</option>
-          <option>cronjobs</option>
-          <option>serviceaccounts</option>
-          <option>roles</option>
-          <option>rolebindings</option>
-          <option>clusterroles</option>
-          <option>namespaces</option>
+        <select id="res-select" class="sel" style="min-width:155px" onchange="refresh()">
+          <optgroup label="─ Workloads">
+            <option>pods</option>
+            <option>deployments</option>
+            <option>statefulsets</option>
+            <option>daemonsets</option>
+            <option>replicasets</option>
+          </optgroup>
+          <optgroup label="─ Config">
+            <option>configmaps</option>
+            <option>secrets</option>
+          </optgroup>
+          <optgroup label="─ Networking">
+            <option>services</option>
+            <option>ingresses</option>
+          </optgroup>
+          <optgroup label="─ Storage">
+            <option>persistentvolumeclaims</option>
+            <option>persistentvolumes</option>
+          </optgroup>
+          <optgroup label="─ Batch">
+            <option>jobs</option>
+            <option>cronjobs</option>
+          </optgroup>
+          <optgroup label="─ RBAC">
+            <option>serviceaccounts</option>
+            <option>roles</option>
+            <option>rolebindings</option>
+            <option>clusterroles</option>
+          </optgroup>
+          <optgroup label="─ Cluster">
+            <option>nodes</option>
+            <option>namespaces</option>
+            <option>events</option>
+          </optgroup>
         </select>
 
         <button onclick="refresh()" class="btn btn-brand btn-sm">⟳ Refresh</button>
@@ -1285,6 +1347,7 @@
         <button class="btn btn-sm" onclick="doRestart()" id="btn-restart" disabled>↺ Restart</button>
         <button class="btn btn-sm" onclick="doScale()" id="btn-scale" disabled>⚖ Scale</button>
         <button class="btn btn-sm" onclick="doRollout()" id="btn-rollout" disabled>🔄 Rollout</button>
+        <button class="btn btn-sm" onclick="jumpToPods()" id="btn-jump-pods" style="display:none" title="Switch to pods and filter by this workload name">🔗 → Pods</button>
         <button class="btn btn-sm" onclick="doEditData()" id="btn-edit" disabled>✏ Edit Data</button>
         <button class="btn btn-sm btn-danger" onclick="doDelete()" id="btn-delete" disabled>🗑 Delete</button>
         <span id="sel-info" style="font-size:12px;color:var(--text3);margin-left:6px"></span>
@@ -1295,6 +1358,18 @@
 
       <!-- ═══ MAIN CONTENT ══════════════════════════════════════════════════════════ -->
       <div style="display:flex;flex-direction:column;flex:1;overflow:hidden">
+
+        <!-- Pod quick-filter chips — shown only when resource=pods -->
+        <div id="pod-filter-chips" style="display:none;align-items:center;gap:6px;padding:5px 10px;border-bottom:1px solid var(--border);background:var(--surface2);flex-shrink:0;flex-wrap:wrap">
+          <span style="font-size:11px;font-weight:600;color:var(--text3);text-transform:uppercase;letter-spacing:.04em">Show:</span>
+          <button class="pod-chip chip-active" id="chip-all"     onclick="setQuickFilter('')">All</button>
+          <button class="pod-chip" id="chip-running"             onclick="setQuickFilter('Running')">🟢 Running</button>
+          <button class="pod-chip" id="chip-pending"             onclick="setQuickFilter('Pending')">🟡 Pending</button>
+          <button class="pod-chip" id="chip-failed"              onclick="setQuickFilter('Failed')">🔴 Failed</button>
+          <button class="pod-chip" id="chip-crash"               onclick="setQuickFilter('CrashLoop')">💥 CrashLoop</button>
+          <button class="pod-chip" id="chip-err"                 onclick="setQuickFilter('Error')">⚠ Error</button>
+          <button class="pod-chip" id="chip-init"                onclick="setQuickFilter('Init')">⏳ Init</button>
+        </div>
 
         <!-- Resource table -->
         <div style="flex:1;overflow:auto;background:var(--surface);min-height:120px" id="table-wrapper">
@@ -2343,6 +2418,15 @@
       S.headers = d.headers; S.rows = d.rows; S.filteredRows = d.rows;
       applyFilter();
       document.getElementById('row-count').textContent = `${d.rows.length} ${S.resource}`;
+      // Show/hide pod quick-filter chips strip; reset active chip on fresh load
+      const chipStrip = document.getElementById('pod-filter-chips');
+      if (chipStrip) {
+        chipStrip.style.display = S.resource === 'pods' ? 'flex' : 'none';
+        if (S.resource === 'pods') {
+          document.querySelectorAll('.pod-chip').forEach(c => c.classList.remove('chip-active'));
+          document.getElementById('chip-all')?.classList.add('chip-active');
+        }
+      }
       if (S.resource === 'pods') {
         const lp = document.getElementById('log-pod'), cur = lp.value;
         lp.innerHTML = d.rows.map(r => `<option value=\"${escHtml(r.cells[0])}\">${escHtml(r.cells[0])}</option>`).join('');
@@ -2382,12 +2466,27 @@
         tbody.innerHTML = `<tr><td colspan="${Math.max(S.headers.length, 1)}" style="padding:48px;text-align:center;color:var(--text3)">No ${S.resource} found.</td></tr>`;
         return;
       }
-      tbody.innerHTML = S.filteredRows.map((row, fi) => {
+      // Determine STATUS column index (prefer explicit header match, fall back to col 1)
+      const statusColIdx = (() => {
+        const idx = S.headers.findIndex(h => /^status$/i.test(h));
+        return idx >= 0 ? idx : 1;
+      })();
+      tbody.innerHTML = S.filteredRows.map((row) => {
         const ri = S.rows.indexOf(row);
         const cells = S.headers.map((_, ci) => row.cells[ci] || '');
         const selCls = S.selected.has(ri) ? 'selected' : '';
-        const tds = cells.map((c, ci) => { const val = ci === 1 ? statusBadge(c) : escHtml(c); return `<td>${val}</td>`; }).join('');
-        return `<tr class="${selCls}" data-ri="${ri}" onclick="selectRow(event,${ri})" ondblclick="doDescribe()" oncontextmenu="showCtxMenu(event,${ri})">${tds}</tr>`;
+        // Row-level status class for visual triage
+        const statusText = (cells[statusColIdx] || '').toUpperCase();
+        let rowStatusCls = '';
+        if (/ERROR|CRASHLOOP|OOMKILL|FAILED|BACKOFF|IMAGEPULL/.test(statusText)) rowStatusCls = 'row-err';
+        else if (/PENDING|TERMINAT|UNKNOWN|INIT/.test(statusText)) rowStatusCls = 'row-warn';
+        const tds = cells.map((c, ci) => {
+          const display = ci === statusColIdx ? statusBadge(c) : escHtml(c);
+          // Each cell: click selects row (handled by tr) + copies value; title shows raw value for hover preview
+          return `<td title="${escHtml(c)}" onclick="copyCell(event,${JSON.stringify(c)})">${display}</td>`;
+        }).join('');
+        // Double-click opens YAML (more actionable than Describe)
+        return `<tr class="${selCls} ${rowStatusCls}" data-ri="${ri}" onclick="selectRow(event,${ri})" ondblclick="doYaml()" oncontextmenu="showCtxMenu(event,${ri})">${tds}</tr>`;
       }).join('');
     }
     function statusBadge(s) {
@@ -2412,10 +2511,72 @@
     }
     function selectedNames() { return [...S.selected].map(i => S.rows[i]?.cells[0]).filter(Boolean); }
     function updateActionBtns() {
-      const n = S.selected.size;
-      ['btn-describe', 'btn-logs', 'btn-events', 'btn-yaml', 'btn-terminal', 'btn-exec', 'btn-restart', 'btn-scale', 'btn-rollout', 'btn-edit', 'btn-delete']
-        .forEach(id => { document.getElementById(id).disabled = (n === 0); });
+      const n   = S.selected.size;
+      const res = S.resource || '';
+      const isPod      = res === 'pods';
+      const isWorkload = ['deployments','statefulsets','daemonsets'].includes(res);
+      const isScalable = ['deployments','replicasets','statefulsets'].includes(res);
+      const isConfig   = ['configmaps','secrets'].includes(res);
+
+      // Always-present actions (show for all resource types)
+      for (const id of ['btn-describe','btn-events','btn-yaml','btn-delete']) {
+        const el = document.getElementById(id); if (!el) continue;
+        el.style.display = ''; el.disabled = (n === 0);
+      }
+      // Pods only
+      for (const id of ['btn-logs','btn-terminal','btn-exec']) {
+        const el = document.getElementById(id); if (!el) continue;
+        el.style.display = isPod ? '' : 'none'; el.disabled = (n === 0);
+      }
+      // Workload actions (deployments / statefulsets / daemonsets)
+      for (const id of ['btn-restart','btn-rollout']) {
+        const el = document.getElementById(id); if (!el) continue;
+        el.style.display = isWorkload ? '' : 'none'; el.disabled = (n === 0);
+      }
+      // Scalable workloads
+      { const el = document.getElementById('btn-scale'); if (el) { el.style.display = isScalable ? '' : 'none'; el.disabled = (n === 0); } }
+      // Config map / secret editor
+      { const el = document.getElementById('btn-edit'); if (el) { el.style.display = isConfig ? '' : 'none'; el.disabled = (n === 0); } }
+      // Jump-to-pods: visible when a workload row is selected
+      { const el = document.getElementById('btn-jump-pods'); if (el) el.style.display = (isWorkload || isScalable) && n > 0 ? '' : 'none'; }
+
       document.getElementById('sel-info').textContent = n > 0 ? `${n} selected` : '';
+    }
+
+    // ── Cell click-to-copy ────────────────────────────────────────────────────────
+    function copyCell(e, val) {
+      // Row's onclick will still fire (selectRow); this just also copies the cell value
+      if (!val) return;
+      navigator.clipboard.writeText(val).then(() => {
+        const td = e.currentTarget;
+        td.classList.add('cell-copied');
+        setTimeout(() => td.classList.remove('cell-copied'), 600);
+      }).catch(() => {});
+    }
+
+    // ── Pod quick-filter chips ─────────────────────────────────────────────────────
+    function setQuickFilter(val) {
+      document.getElementById('search-input').value = val;
+      applyFilter();
+      // Update active chip
+      const chipMap = { '': 'chip-all', 'Running': 'chip-running', 'Pending': 'chip-pending',
+                        'Failed': 'chip-failed', 'CrashLoop': 'chip-crash', 'Error': 'chip-err', 'Init': 'chip-init' };
+      document.querySelectorAll('.pod-chip').forEach(c => c.classList.remove('chip-active'));
+      const activeId = chipMap[val] || 'chip-all';
+      document.getElementById(activeId)?.classList.add('chip-active');
+    }
+
+    // ── Jump to pods (from a workload row) ─────────────────────────────────────────
+    function jumpToPods() {
+      const names = selectedNames(); if (!names.length) return;
+      const workloadName = names[0];
+      // Switch to pods resource, pre-fill filter with the workload name so related pods show up
+      document.getElementById('res-select').value = 'pods';
+      document.getElementById('search-input').value = workloadName;
+      // Reset quick-filter chip state
+      document.querySelectorAll('.pod-chip').forEach(c => c.classList.remove('chip-active'));
+      document.getElementById('chip-all')?.classList.add('chip-active');
+      refresh();
     }
 
     // ── Context menu ──────────────────────────────────────────────────────────────
