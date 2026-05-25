@@ -289,22 +289,26 @@
       background: var(--row-hover);
     }
 
-    /* ── Row status colouring ──────────────────────────────────────────────────── */
-    .res-table tbody tr.row-err > td {
+    /* ── Row status colouring (applies to both res-table and pf-table) ──────────── */
+    .res-table tbody tr.row-err > td,
+    .pf-table tbody tr.row-err > td {
       background: rgba(185,28,28,0.055);
     }
     .res-table tbody tr.row-err.selected > td {
       background: rgba(185,28,28,0.18) !important;
     }
-    .res-table tbody tr.row-warn > td {
+    .res-table tbody tr.row-warn > td,
+    .pf-table tbody tr.row-warn > td {
       background: rgba(161,100,0,0.055);
     }
     .res-table tbody tr.row-warn.selected > td {
       background: rgba(161,100,0,0.18) !important;
     }
-    .dark .res-table tbody tr.row-err > td { background: rgba(248,113,113,0.08); }
+    .dark .res-table tbody tr.row-err > td,
+    .dark .pf-table tbody tr.row-err > td  { background: rgba(248,113,113,0.08); }
     .dark .res-table tbody tr.row-err.selected > td { background: rgba(248,113,113,0.22) !important; }
-    .dark .res-table tbody tr.row-warn > td { background: rgba(251,191,36,0.07); }
+    .dark .res-table tbody tr.row-warn > td,
+    .dark .pf-table tbody tr.row-warn > td { background: rgba(251,191,36,0.07); }
     .dark .res-table tbody tr.row-warn.selected > td { background: rgba(251,191,36,0.20) !important; }
 
     /* ── Cell copy button (appears on individual cell hover) ─────────────────── */
@@ -1814,9 +1818,18 @@
                   onchange="loadJobsPanel()" /> All NS
               </label>
               <button onclick="loadJobsPanel()" class="btn btn-sm">⟳ Refresh</button>
-              <input type="text" class="inp inp-sm" style="width:160px" placeholder="🔍 Filter…"
-                oninput="_filterRows(this.value,'jobs-content')" />
+              <input type="text" id="jobs-text-filter" class="inp inp-sm" style="width:160px" placeholder="🔍 Filter…"
+                oninput="setJobFilter('',this.value)" />
               <span id="jobs-ts" style="font-size:11px;color:var(--text3);margin-left:auto"></span>
+            </div>
+            <!-- Status filter chips -->
+            <div id="jobs-filter-chips" style="display:flex;align-items:center;gap:6px;padding:5px 10px;border-bottom:1px solid var(--border);background:var(--surface2);flex-shrink:0;flex-wrap:wrap">
+              <span style="font-size:11px;font-weight:600;color:var(--text3);text-transform:uppercase;letter-spacing:.04em">Filter:</span>
+              <button class="pod-chip chip-active" id="jchip-all"       data-status=""          onclick="setJobFilter('')">All</button>
+              <button class="pod-chip" id="jchip-running"               data-status="Running"   onclick="setJobFilter('Running')">🔵 Running</button>
+              <button class="pod-chip" id="jchip-complete"              data-status="Complete"  onclick="setJobFilter('Complete')">🟢 Complete</button>
+              <button class="pod-chip" id="jchip-failed"                data-status="Failed"    onclick="setJobFilter('Failed')">🔴 Failed</button>
+              <button class="pod-chip" id="jchip-suspended"             data-status="Suspended" onclick="setJobFilter('Suspended')">⏸ Suspended</button>
             </div>
             <div id="jobs-content" style="flex:1;overflow:auto;padding:12px;background:var(--bg)">
               <p style="color:var(--text3);font-size:13px">Click the Jobs tab to load Jobs and CronJobs.</p>
@@ -3253,7 +3266,7 @@
       } else {
         const rows = d.alerts.map(a => {
           const isCrash = a.reason === 'CrashLoopBackOff';
-          return `<tr>
+          return `<tr class="row-err">
         <td style="font-family:Consolas,monospace">${escHtml(a.name)}</td>
         <td style="color:var(--text3)">${escHtml(a.namespace)}</td>
         <td style="color:var(--text3)">${escHtml(a.container)}</td>
@@ -3289,7 +3302,7 @@
           const totalMem = d.total_pending_mem || '—';
           const prows = d.pending_pods.map(p => {
             const mem = memMap[`${p.name}|${p.namespace}`] || {};
-            return `<tr>
+            return `<tr class="row-warn">
           <td style="font-family:Consolas,monospace">${escHtml(p.name)}</td>
           <td style="color:var(--text3)">${escHtml(p.namespace)}</td>
           <td><span class="badge badge-yellow">${escHtml(p.reason)}</span></td>
@@ -3776,8 +3789,9 @@
         html += `<table class="pf-table"><thead><tr><th>Namespace</th><th>Job</th><th>Status</th><th>Age</th><th>Mem Requests</th><th>Action</th></tr></thead><tbody>`;
         for (const job of visJobs) {
           const sc = job.status === 'Failed' ? 'badge-red' : 'badge-green';
+          const staleRowCls = job.status === 'Failed' ? 'row-err' : 'row-warn';
           const memCls = job.mem_bytes > 0 ? 'color:var(--warn-fg)' : 'color:var(--text3)';
-          html += `<tr>
+          html += `<tr class="${staleRowCls}">
         <td style="color:var(--text3)">${escHtml(job.namespace)}</td>
         <td>${escHtml(job.name)}</td>
         <td><span class="badge ${sc}">${escHtml(job.status)}</span></td>
@@ -4382,7 +4396,7 @@
           const suspBtn = cj.suspend
             ? `<button class="btn btn-sm btn-success" title="Resume CronJob" onclick="cronJobSuspend(${na},${nsa},false)">▶ Resume</button>`
             : `<button class="btn btn-sm btn-warn"    title="Suspend CronJob — stops future runs" onclick="cronJobSuspend(${na},${nsa},true)">⏸ Suspend</button>`;
-          html += `<tr>
+          html += `<tr class="${cj.suspend ? 'row-warn' : ''}">
         <td style="font-weight:600">${escHtml(cj.name)}</td>
         <td style="color:var(--text3)">${escHtml(cj.namespace)}</td>
         <td style="font-family:Consolas,monospace;color:var(--brand)">${escHtml(cj.schedule)}</td>
@@ -4411,8 +4425,9 @@
     </tr></thead><tbody>`;
         for (const job of d.jobs) {
           const sc = job.status === 'Complete' ? 'badge-green' : job.status === 'Failed' ? 'badge-red' : job.status === 'Running' ? 'badge-blue' : 'badge-yellow';
+          const jobRowCls = job.status === 'Failed' ? 'row-err' : job.status === 'Running' ? 'row-warn' : '';
           const na = escAttr(JSON.stringify(job.name)), nsa = escAttr(JSON.stringify(job.namespace));
-          html += `<tr>
+          html += `<tr class="${jobRowCls}">
         <td style="font-weight:600">${escHtml(job.name)}</td>
         <td style="color:var(--text3)">${escHtml(job.namespace)}</td>
         <td><span class="badge ${sc}">${escHtml(job.status)}</span></td>
@@ -4434,13 +4449,41 @@
         html += `<p style="color:var(--text3);font-size:12px">No Jobs found.</p>`;
       }
       content.innerHTML = html;
-      _filterRows(document.querySelector('#pane-jobs input[placeholder*="Filter"]')?.value || '', 'jobs-content');
+      // Re-apply active chip filter (preserves selection across refresh)
+      const activeJChip = document.querySelector('#jobs-filter-chips .pod-chip.chip-active');
+      const activeStatus = activeJChip?.dataset.status || '';
+      const textQ = document.getElementById('jobs-text-filter')?.value || '';
+      _jobsApplyFilter(activeStatus, textQ);
       } catch(e) {
         content.innerHTML = `<p style="color:var(--err-fg);font-size:12px">Error loading jobs: ${escHtml(String(e))}</p>`;
         document.getElementById('jobs-ts').textContent = 'Error';
       } finally {
         hideProcessingOverlay();
       }
+    }
+
+    // ── Jobs tab status filter ────────────────────────────────────────────────────
+    function setJobFilter(status, textOverride) {
+      // Update active chip
+      document.querySelectorAll('#jobs-filter-chips .pod-chip').forEach(c => c.classList.remove('chip-active'));
+      const chipMap = { '': 'jchip-all', 'Running': 'jchip-running', 'Complete': 'jchip-complete',
+                        'Failed': 'jchip-failed', 'Suspended': 'jchip-suspended' };
+      document.getElementById(chipMap[status] || 'jchip-all')?.classList.add('chip-active');
+      const textQ = textOverride !== undefined ? textOverride : (document.getElementById('jobs-text-filter')?.value || '');
+      _jobsApplyFilter(status, textQ);
+    }
+
+    function _jobsApplyFilter(status, textQ) {
+      const q = (textQ || '').toLowerCase();
+      const content = document.getElementById('jobs-content');
+      if (!content) return;
+      content.querySelectorAll('table tbody tr').forEach(tr => {
+        // Status chip filter: match by badge text in the row (case-insensitive)
+        const statusMatch = !status || tr.textContent.includes(status);
+        // Text filter: full-row substring match
+        const textMatch = !q || tr.textContent.toLowerCase().includes(q);
+        tr.style.display = statusMatch && textMatch ? '' : 'none';
+      });
     }
 
     // ── Jobs / CronJobs actions ───────────────────────────────────────────────────
@@ -4862,7 +4905,8 @@
         html += `<table class="pf-table"><thead><tr><th>Namespace</th><th>Job</th><th>Status</th><th>Age</th><th>Mem Requests</th><th>Action</th></tr></thead><tbody>`;
         for (const job of staleJobs) {
           const sc = job.status === 'Failed' ? 'badge-red' : 'badge-green';
-          html += `<tr>
+          const sjRowCls = job.status === 'Failed' ? 'row-err' : 'row-warn';
+          html += `<tr class="${sjRowCls}">
             <td style="color:var(--text3)">${escHtml(job.namespace)}</td>
             <td>${escHtml(job.name)}</td>
             <td><span class="badge ${sc}">${escHtml(job.status)}</span></td>
