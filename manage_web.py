@@ -2247,6 +2247,68 @@ def compliance_check():
              f"{len(no_ready_pods)} pod(s) missing readiness probe: {_fmt(no_ready_pods)}" if no_ready_pods
              else "All pods have readiness probes")
 
+    # ── Deployment-level checks ───────────────────────────────────────────────
+    dep_out, _, dep_rc = run_cmd([KUBECTL_CMD, "get", "deployments", "-n", ns, "-o", "json"], timeout=15)
+    if dep_rc == 0:
+        deps = json.loads(dep_out).get("items", [])
+        single_replica, no_anti_affinity, no_rolling, no_prestop = [], [], [], []
+        for dep in deps:
+            dname = dep["metadata"]["name"]
+            spec  = dep.get("spec", {})
+            tmpl  = spec.get("template", {}).get("spec", {})
+            # 1. Replica count > 1
+            if spec.get("replicas", 1) < 2:
+                single_replica.append(dname)
+            # 2. Pod anti-affinity
+            affinity = tmpl.get("affinity", {})
+            if not affinity.get("podAntiAffinity"):
+                no_anti_affinity.append(dname)
+            # 3. Rolling update strategy with maxUnavailable + maxSurge
+            strategy = spec.get("strategy", {})
+            ru = strategy.get("rollingUpdate", {})
+            if (strategy.get("type", "RollingUpdate") != "RollingUpdate" or
+                    ru.get("maxUnavailable") is None or ru.get("maxSurge") is None):
+                no_rolling.append(dname)
+            # 4. PreStop hook on at least one container
+            for c in tmpl.get("containers", []):
+                lc = c.get("lifecycle", {}) or {}
+                if not lc.get("preStop"):
+                    no_prestop.append(f"{dname}/{c['name']}")
+
+        if deps:
+            _chk("Replica Count > 1", "Reliability", "high",
+                 "All deployments run at least 2 replicas for high availability",
+                 "Set spec.replicas: 2 (or more) in your Deployment manifests",
+                 not single_replica,
+                 f"{len(single_replica)} deployment(s) with replicas < 2: {_fmt(single_replica)}" if single_replica
+                 else f"All {len(deps)} deployment(s) have ≥ 2 replicas")
+
+            _chk("Pod Anti-Affinity", "Reliability", "medium",
+                 "Deployments define podAntiAffinity so pods spread across nodes",
+                 "Add spec.template.spec.affinity.podAntiAffinity to spread pods across nodes/zones",
+                 not no_anti_affinity,
+                 f"{len(no_anti_affinity)} deployment(s) missing anti-affinity: {_fmt(no_anti_affinity)}" if no_anti_affinity
+                 else f"All {len(deps)} deployment(s) have podAntiAffinity defined")
+
+            _chk("Rolling Update Strategy", "Reliability", "medium",
+                 "All deployments use RollingUpdate strategy with explicit maxUnavailable and maxSurge",
+                 "Set spec.strategy.type: RollingUpdate with maxUnavailable: 1 and maxSurge: 1",
+                 not no_rolling,
+                 f"{len(no_rolling)} deployment(s) missing rolling update config: {_fmt(no_rolling)}" if no_rolling
+                 else f"All {len(deps)} deployment(s) have rolling update strategy configured")
+
+            _chk("PreStop Lifecycle Hook", "Reliability", "medium",
+                 "All deployment containers have a lifecycle.preStop hook for graceful shutdown",
+                 "Add lifecycle.preStop (exec sleep or httpGet) to allow in-flight requests to drain",
+                 not no_prestop,
+                 f"{len(no_prestop)} container(s) missing preStop: {_fmt(no_prestop)}" if no_prestop
+                 else f"All containers in {len(deps)} deployment(s) have preStop hooks")
+        else:
+            _chk("Deployment Checks", "Reliability", "low",
+                 "Deployment-level checks (replicas, anti-affinity, rolling update, preStop)",
+                 "No deployments found in this namespace to check",
+                 True, "No deployments found — skipped")
+
     # ── PodDisruptionBudget ───────────────────────────────────────────────────
     out, _, rc = run_cmd([KUBECTL_CMD, "get", "pdb", "-n", ns, "-o", "json"], timeout=10)
     if rc == 0:
