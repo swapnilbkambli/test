@@ -1203,9 +1203,6 @@
       <div class="vtab-sep"></div>
       <div class="vtab-section">Monitoring</div>
       <button class="vtab-btn" id="vtab-health" onclick="switchMainTab('health');loadHealth()">&#128154; Health</button>
-      <button class="vtab-btn" id="vtab-topology" onclick="switchMainTab('topology');loadTopology()">&#128194;
-        Topology</button>
-      <button class="vtab-btn" id="vtab-quota" onclick="switchMainTab('quota');loadQuota()">&#128202; Quota</button>
       <div class="vtab-sep"></div>
       <div class="vtab-section">Workloads</div>
       <button class="vtab-btn" id="vtab-hpa" onclick="switchMainTab('hpa');loadHpa()">&#9878; HPA</button>
@@ -1502,6 +1499,11 @@
                 All NS
               </label>
               <button onclick="loadHealth()" class="btn btn-sm">&#x27F3; Refresh</button>
+              <div class="toolbar-sep"></div>
+              <span style="font-size:11px;color:var(--text3)">Stale jobs</span>
+              <input id="health-stale-hours" type="number" value="4" min="1" max="720" class="inp inp-sm" style="width:50px" title="Hours before a completed/failed job is considered stale" />
+              <span style="font-size:11px;color:var(--text3)">hr</span>
+              <button onclick="deleteAllStaleJobs()" class="btn btn-sm btn-danger" id="btn-delete-all-stale" style="display:none">&#128465; Delete All Stale</button>
               <label
                 style="display:flex;align-items:center;gap:5px;font-size:12px;color:var(--text2);cursor:pointer;margin-left:8px">
                 <input type="checkbox" id="chk-health-poll" style="accent-color:var(--brand)"
@@ -1521,7 +1523,7 @@
                 </div>
               </div>
               <div class="coll-card">
-                <div class="coll-hdr" onclick="_coll('hc-quota-snap')"><span class="coll-arrow">&#x25B6;</span>&ensp;&#128202; Quota Utilisation<span id="hc-quota-snap-ct" style="font-weight:400;color:var(--text3)"></span></div>
+                <div class="coll-hdr" onclick="_coll('hc-quota-snap')"><span class="coll-arrow">&#x25B6;</span>&ensp;&#128202; Quota &amp; Resource Usage<span id="hc-quota-snap-ct" style="font-weight:400;color:var(--text3)"></span></div>
                 <div id="hc-quota-snap" class="coll-body" style="display:none">
                   <div id="health-quota-snap"></div>
                 </div>
@@ -1616,58 +1618,6 @@
           </div>
 
           <!-- Topology -->
-          <div id="pane-topology" style="display:none;flex-direction:column;flex:1;overflow:hidden">
-            <div
-              style="display:flex;align-items:center;gap:10px;padding:6px 10px;border-bottom:1px solid var(--border);flex-shrink:0;background:var(--surface2)">
-              <span style="font-size:11px;font-weight:600;color:var(--text3)">RESOURCE TOPOLOGY</span>
-              <select id="topo-ns-select" class="sel" style="min-width:170px" onchange="loadTopology()"></select>
-              <label style="display:flex;align-items:center;gap:5px;font-size:12px;color:var(--text2);cursor:pointer">
-                <input type="checkbox" id="chk-topo-allns" style="accent-color:var(--brand)"
-                  onchange="loadTopology()" />
-                All NS
-              </label>
-              <button onclick="loadTopology()" class="btn btn-sm">&#x27F3; Refresh</button>
-              <input type="text" class="inp inp-sm" style="width:160px" placeholder="🔍 Filter deployments…"
-                oninput="_filterRows(this.value,'topology-content')" />
-            </div>
-            <div id="topology-content" style="flex:1;overflow:auto;padding:12px;background:var(--bg)"></div>
-          </div>
-
-          <!-- Quota Monitor -->
-          <div id="pane-quota" style="display:none;flex-direction:column;flex:1;overflow:hidden">
-            <div
-              style="display:flex;align-items:center;gap:8px;padding:6px 10px;border-bottom:1px solid var(--border);flex-shrink:0;flex-wrap:wrap;background:var(--surface2)">
-              <span style="font-size:11px;font-weight:600;color:var(--text3)">NAMESPACE</span>
-              <select id="quota-ns-filter" class="sel" style="min-width:220px" onchange="_renderQuota()">
-                <option value="">— All pinned —</option>
-              </select>
-              <input id="quota-ns-input" type="text" class="inp inp-sm" style="width:160px" placeholder="Add namespace…"
-                onkeydown="if(event.key==='Enter')addQuotaNs()" />
-              <button onclick="addQuotaNs()" class="btn btn-sm" style="color:var(--brand)">＋ Add NS</button>
-              <div class="toolbar-sep"></div>
-              <span style="font-size:11px;color:var(--text3)">Stale threshold</span>
-              <input id="quota-stale-hours" type="number" value="4" min="1" max="720" class="inp inp-sm"
-                style="width:55px" />
-              <span style="font-size:11px;color:var(--text3)">hr</span>
-              <button onclick="deleteAllStaleJobs()" class="btn btn-sm btn-danger" id="btn-delete-all-stale"
-                style="display:none">🗑 Delete All Stale</button>
-              <div class="toolbar-sep"></div>
-              <label style="display:flex;align-items:center;gap:5px;font-size:12px;color:var(--text2);cursor:pointer">
-                <input type="checkbox" id="chk-quota-autorefresh" style="accent-color:var(--brand)"
-                  onchange="toggleQuotaAutoRefresh()" />
-                Auto-refresh
-              </label>
-              <input id="quota-refresh-mins" type="number" value="15" min="1" max="120" class="inp inp-sm"
-                style="width:50px" onchange="toggleQuotaAutoRefresh()" />
-              <span style="font-size:11px;color:var(--text3)">min</span>
-              <button onclick="loadQuota()" class="btn btn-sm btn-brand">⟳ Refresh</button>
-              <span id="quota-ts" style="font-size:11px;color:var(--text3);margin-left:auto"></span>
-            </div>
-            <div id="quota-content" style="flex:1;overflow:auto;padding:12px;background:var(--bg)">
-              <p style="color:var(--text3);font-size:13px">Add namespaces above (or use the main Namespace toolbar) and
-                click Refresh.</p>
-            </div>
-          </div>
 
           <!-- HPA View -->
           <div id="pane-hpa" style="display:none;flex-direction:column;flex:1;overflow:hidden">
@@ -2150,7 +2100,7 @@
       // Fix #4: stop health poll
       if (S.healthPollTimer) { clearInterval(S.healthPollTimer); S.healthPollTimer = null; }
       if (S.quotaAutoRefreshTimer) { clearInterval(S.quotaAutoRefreshTimer); S.quotaAutoRefreshTimer = null; }
-      _quotaInitialized = false; _quotaData = null;
+      _quotaInitialized = false; _quotaData = null; _healthQuotaData = null; _quotaSnapHistory = [];
       // Fix #5: reset first-load flag so next login re-applies the namespace filter
       S._loadedOnce = false;
       // Clear environment-specific state so pins from the previous env don't bleed into the next
@@ -2233,7 +2183,7 @@
     // ── Namespaces ────────────────────────────────────────────────────────────────
     function _clearAllNsDropdowns() {
       const loading = '<option value="" disabled selected>Loading…</option>';
-      for (const id of ['ns-select', 'health-ns-select', 'topo-ns-select',
+      for (const id of ['ns-select', 'health-ns-select',
         'hpa-ns-select', 'ingress-ns-select', 'crd-ns-select', 'jobs-ns-select',
         'netpol-ns-select', 'compliance-ns-select']) {
         const el = document.getElementById(id);
@@ -2306,7 +2256,6 @@
       S.namespace = mainSel?.value || all[0] || 'default';
 
       _fillSel(document.getElementById('health-ns-select'), true);
-      _fillSel(document.getElementById('topo-ns-select'), true);
       for (const sid of ['hpa-ns-select', 'ingress-ns-select', 'crd-ns-select', 'jobs-ns-select',
                           'netpol-ns-select', 'compliance-ns-select']) {
         _fillSel(document.getElementById(sid), true);
@@ -2320,7 +2269,7 @@
       // Fix #8: clear search so stale filter doesn't hide results in the new namespace
       document.getElementById('search-input').value = '';
       // Fix #11: sync all other namespace dropdowns to the newly selected value
-      for (const id of ['health-ns-select', 'topo-ns-select', 'hpa-ns-select',
+      for (const id of ['health-ns-select', 'hpa-ns-select',
                         'ingress-ns-select', 'crd-ns-select', 'jobs-ns-select',
                         'netpol-ns-select', 'compliance-ns-select']) {
         const el = document.getElementById(id);
@@ -3243,8 +3192,19 @@
         }
       }
       updateAlertBadge(d.alerts);
-      _renderHealthQuotaSnap(d.quota_snapshot || [], all);
       _loadTriageSections();
+      // Full quota fetch (single-namespace only)
+      if (!all) {
+        try {
+          const staleHours = parseFloat(document.getElementById('health-stale-hours')?.value) || 4;
+          const qr = await fetch(`/api/quota?namespaces=${encodeURIComponent(ns)}&stale_hours=${staleHours}`);
+          const qd = await qr.json();
+          if (qd.ok) { _healthQuotaData = qd; _renderHealthFullQuota(qd, staleHours); }
+          else _renderHealthQuotaSnap(d.quota_snapshot || [], all);
+        } catch(_) { _renderHealthQuotaSnap(d.quota_snapshot || [], all); }
+      } else {
+        _renderHealthQuotaSnap(d.quota_snapshot || [], all);
+      }
       } catch(e) {
         document.getElementById('health-cards').innerHTML = `<p style="color:var(--err-fg);font-size:12px">Error loading health: ${escHtml(String(e))}</p>`;
         document.getElementById('health-ts').textContent = 'Error';
@@ -3475,11 +3435,8 @@
         await reloadNs();          // refreshes main NS toolbar
         _rebuildQuotaNsDropdown(); // refreshes quota dropdown from S.pinnedNs
       }
-      // Select the newly added namespace in the quota dropdown and refresh
-      const sel = document.getElementById('quota-ns-filter');
-      if (sel) sel.value = ns;
       toast('Namespace added', `"${ns}" pinned.`, 'ok');
-      loadQuota();
+      loadHealth();
     }
 
     // Internal cache of last quota API response
@@ -3660,37 +3617,38 @@
       });
       const d = await r.json();
       const res = d.results?.[0];
-      if (res?.ok) { toast('Deleted', `Job "${name}" deleted.`, 'ok'); loadQuota(); }
+      if (res?.ok) { toast('Deleted', `Job "${name}" deleted.`, 'ok'); loadHealth(); }
       else toast('Delete failed', res?.output || 'Unknown error', 'error');
     }
 
     async function deleteAllStaleJobs() {
-      if (!_quotaData) return;
-      const nsFlt = document.getElementById('quota-ns-filter').value;
-      const jobs = nsFlt ? _quotaData.stale_jobs.filter(j => j.namespace === nsFlt) : _quotaData.stale_jobs;
+      const data = _healthQuotaData;
+      if (!data) return;
+      const jobs = data.stale_jobs || [];
+      const nsFlt = null; // health tab is always single-namespace
       if (!jobs.length) { toast('No stale jobs', 'Nothing to delete.', 'warn'); return; }
       const names = jobs.map(j => j.name).join(', ');
-      const label = nsFlt ? `in namespace "${nsFlt}"` : 'across all pinned namespaces';
+      const ns = jobs[0]?.namespace || S.namespace;
+      const label = `in namespace "${ns}"`;
       // First confirmation
-      if (!confirm(`Delete ALL ${jobs.length} stale job(s) ${label}?\n\n${names}\n\nClick OK to proceed to final confirmation.`)) return;
+      if (!confirm(`Delete ALL ${jobs.length} stale job(s) ${label}?\n\n${jobs.map(j=>j.name).join(', ')}\n\nClick OK to proceed to final confirmation.`)) return;
       // Second confirmation
-      if (!confirm(`FINAL CONFIRMATION\n\nYou are about to permanently delete ${jobs.length} job(s) ${label}.\nThis cannot be undone and will free up quota.\n\nAre you absolutely sure?`)) return;
+      if (!confirm(`FINAL CONFIRMATION\n\nPermanently delete ${jobs.length} job(s) ${label}.\nThis cannot be undone.\n\nAre you absolutely sure?`)) return;
 
       let ok = 0, fail = 0;
-      // Group by namespace for efficient deletion
       const byNs = {};
       for (const j of jobs) { (byNs[j.namespace] ??= []).push(j.name); }
-      for (const [ns, jobNames] of Object.entries(byNs)) {
+      for (const [jobNs, jobNames] of Object.entries(byNs)) {
         const r = await fetch('/api/delete', {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ type: 'jobs', names: jobNames, namespace: ns })
+          body: JSON.stringify({ type: 'jobs', names: jobNames, namespace: jobNs })
         });
         const d = await r.json();
         (d.results || []).forEach(res => { if (res.ok) ok++; else fail++; });
       }
-      if (fail === 0) toast('All deleted', `${ok} stale job(s) deleted successfully.`, 'ok');
+      if (fail === 0) toast('All deleted', `${ok} stale job(s) deleted.`, 'ok');
       else toast('Partial delete', `${ok} deleted, ${fail} failed.`, 'warn');
-      loadQuota();
+      loadHealth();
     }
 
     function toggleQuotaAutoRefresh() {
@@ -3779,7 +3737,7 @@
 
     // ── Tabs ──────────────────────────────────────────────────────────────────────
     const ALL_TABS = ['output', 'logs', 'custom', 'yaml', 'portforward'];
-    const FULL_PANES = ['health', 'topology', 'quota', 'hpa', 'ingress', 'crds', 'jobs', 'netpol', 'compliance'];
+    const FULL_PANES = ['health', 'hpa', 'ingress', 'crds', 'jobs', 'netpol', 'compliance'];
     const BLOCK_PANES = new Set(); // all panes use flex layout
     // ── Main tab (left sidebar) ───────────────────────────────────────────────────
     function switchMainTab(name) {
@@ -4550,8 +4508,10 @@
     function _esc(s) { return String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
 
     // ══════════════════════════════════════════════════════════════════════════════
-    // ── Health: Quota Snapshot ────────────────────────────────────────────────────
+    // ── Health: Full Quota & Resource Usage (replaces standalone Quota tab) ───────
     // ══════════════════════════════════════════════════════════════════════════════
+
+    let _healthQuotaData = null;
 
     // Burn-rate history: [{ts, metrics: {key: pct}}]
     let _quotaSnapHistory = [];
@@ -4560,7 +4520,7 @@
     function _parseK8sCpu(s) {
       if (!s) return 0;
       s = String(s).trim();
-      return s.endsWith('m') ? parseFloat(s) : parseFloat(s) * 1000; // normalise to millicores
+      return s.endsWith('m') ? parseFloat(s) : parseFloat(s) * 1000;
     }
     function _parseK8sMem(s) {
       if (!s) return 0;
@@ -4577,98 +4537,161 @@
       return Math.min(100, Math.round(u / h * 100));
     }
 
+    // Simple fallback: renders the lightweight quota_snapshot from /api/health when the full quota fetch fails
     function _renderHealthQuotaSnap(quotaSnapshot, all_ns) {
-      const el    = document.getElementById('health-quota-snap');
-      const ctEl  = document.getElementById('hc-quota-snap-ct');
+      const el = document.getElementById('health-quota-snap');
+      const ctEl = document.getElementById('hc-quota-snap-ct');
       if (!el) return;
       if (all_ns) {
-        el.innerHTML = '<p style="color:var(--text3);font-size:12px">Quota snapshot is not available in All-NS mode — select a single namespace.</p>';
+        el.innerHTML = '<p style="color:var(--text3);font-size:12px">Quota details not available in All-NS mode — select a single namespace.</p>';
         if (ctEl) ctEl.textContent = '';
         return;
       }
       if (!quotaSnapshot || !quotaSnapshot.length) {
-        el.innerHTML = '<p style="color:var(--text3);font-size:12px">&#9888; No ResourceQuota defined in this namespace.</p>';
+        el.innerHTML = '<p style="color:var(--text3);font-size:12px">&#9888; No ResourceQuota found in this namespace.</p>';
         if (ctEl) ctEl.textContent = ' — none';
         return;
       }
+      _renderHealthFullQuota({ namespaces: quotaSnapshot.map(q => ({
+        namespace: q.name, error: null,
+        quotas: [{ name: q.name, resources: Object.entries(q.hard || {}).map(([k, hv]) => {
+          const uv = (q.used || {})[k] || '0';
+          const isCpu = k.includes('cpu'), isMem = k.includes('memory');
+          const pct = _fmtPct(uv, hv, isCpu ? _parseK8sCpu : (isMem ? _parseK8sMem : v => parseFloat(v)||0));
+          return { resource: k, used: uv, hard: hv, pct };
+        })}],
+        limitranges: [], orphaned_pvcs: []
+      })), stale_jobs: [], orphaned_pvcs: [] }, 4);
+    }
 
-      // Track history for burn-rate
+    // Full renderer: mirrors the old Quota tab display inside the health collapsible
+    function _renderHealthFullQuota(d, staleHours) {
+      const el   = document.getElementById('health-quota-snap');
+      const ctEl = document.getElementById('hc-quota-snap-ct');
+      const deleteBtn = document.getElementById('btn-delete-all-stale');
+      if (!el) return;
+      staleHours = staleHours || 4;
+
+      // Burn-rate tracking
       const now = Date.now();
       const nowMetrics = {};
-      const CPU_KEYS = ['requests.cpu', 'limits.cpu'];
-      const MEM_KEYS = ['requests.memory', 'limits.memory'];
-      for (const q of quotaSnapshot) {
-        for (const [k, hv] of Object.entries(q.hard || {})) {
-          const uv = (q.used || {})[k] || '0';
-          const isCpu = CPU_KEYS.includes(k);
-          const isMem = MEM_KEYS.includes(k);
-          if (isCpu || isMem) nowMetrics[k] = _fmtPct(uv, hv, isCpu ? _parseK8sCpu : _parseK8sMem);
+      for (const ns of (d.namespaces || [])) {
+        for (const q of (ns.quotas || [])) {
+          for (const res of (q.resources || [])) {
+            if (res.pct != null) nowMetrics[res.resource] = res.pct;
+          }
         }
       }
       _quotaSnapHistory.push({ ts: now, metrics: nowMetrics });
       if (_quotaSnapHistory.length > _QUOTA_SNAP_MAX) _quotaSnapHistory.shift();
-
-      // Compute burn rate: pct/hour from oldest to newest if we have ≥ 2 points
       const burnRates = {};
       if (_quotaSnapHistory.length >= 2) {
-        const oldest = _quotaSnapHistory[0], newest = _quotaSnapHistory[_quotaSnapHistory.length - 1];
-        const hrs = (newest.ts - oldest.ts) / 3600000;
-        if (hrs > 0) {
-          for (const k of Object.keys(newest.metrics)) {
-            const a = oldest.metrics[k], b = newest.metrics[k];
-            if (a != null && b != null) burnRates[k] = (b - a) / hrs;
-          }
+        const old = _quotaSnapHistory[0], cur = _quotaSnapHistory[_quotaSnapHistory.length - 1];
+        const hrs = (cur.ts - old.ts) / 3600000;
+        if (hrs > 0) for (const k of Object.keys(cur.metrics)) {
+          const a = old.metrics[k], b = cur.metrics[k];
+          if (a != null && b != null) burnRates[k] = (b - a) / hrs;
         }
       }
 
-      const barColor = pct => pct >= 90 ? 'var(--err-fg)' : pct >= 70 ? 'var(--warn-fg)' : 'var(--ok-fg)';
-      const trendArrow = rate => {
-        if (rate == null) return '';
-        const abs = Math.abs(rate);
-        if (abs < 0.5) return '<span style="color:var(--text3)" title="Stable">→</span>';
-        return rate > 0
-          ? `<span style="color:var(--err-fg)" title="Rising ~${abs.toFixed(1)}%/hr">↑</span>`
-          : `<span style="color:var(--ok-fg)" title="Falling ~${abs.toFixed(1)}%/hr">↓</span>`;
-      };
-      const etaLabel = (pct, rate) => {
-        if (!rate || rate <= 0 || pct == null) return '';
-        const hrsLeft = (100 - pct) / rate;
-        if (hrsLeft > 720) return '';
-        const label = hrsLeft < 2 ? `${Math.round(hrsLeft * 60)}m` : `${Math.round(hrsLeft)}h`;
-        return `<span style="color:var(--err-fg);font-size:10px;margin-left:6px" title="Estimated time to quota exhaustion">⏱ ~${label} to limit</span>`;
+      const barCls = pct => pct == null ? 'quota-bar-ok' : pct >= 90 ? 'quota-bar-crit' : pct >= 70 ? 'quota-bar-warn' : 'quota-bar-ok';
+      const pctCol = pct => pct == null ? 'var(--text3)' : pct >= 90 ? 'var(--err-fg)' : pct >= 70 ? 'var(--warn-fg)' : 'var(--ok-fg)';
+      const trendArrow = k => {
+        const r = burnRates[k]; if (r == null) return '';
+        if (Math.abs(r) < 0.5) return '<span style="color:var(--text3)" title="Stable">→</span>';
+        const hrs = r > 0 ? (100 - (nowMetrics[k] || 0)) / r : null;
+        const eta = hrs && hrs < 720 ? ` <span style="color:var(--err-fg);font-size:10px">⏱~${hrs < 2 ? Math.round(hrs*60)+'m' : Math.round(hrs)+'h'}</span>` : '';
+        return r > 0 ? `<span style="color:var(--err-fg)" title="Rising ~${Math.abs(r).toFixed(1)}%/hr">↑${eta}</span>`
+                     : `<span style="color:var(--ok-fg)" title="Falling ~${Math.abs(r).toFixed(1)}%/hr">↓</span>`;
       };
 
       let html = '';
-      for (const q of quotaSnapshot) {
-        html += `<div style="margin-bottom:16px"><div style="font-size:11px;font-weight:700;color:var(--text3);text-transform:uppercase;letter-spacing:.04em;margin-bottom:8px">${escHtml(q.name)}</div>`;
-        const SHOW_KEYS = ['requests.cpu','limits.cpu','requests.memory','limits.memory','pods','persistentvolumeclaims','services'];
-        let anyShown = false;
-        for (const key of SHOW_KEYS) {
-          const hv = (q.hard || {})[key]; if (!hv) continue;
-          const uv = (q.used || {})[key] || '0';
-          const isCpu = key.includes('cpu'), isMem = key.includes('memory');
-          const pct = _fmtPct(uv, hv, isCpu ? _parseK8sCpu : (isMem ? _parseK8sMem : v => parseFloat(v)||0));
-          const rate = burnRates[key];
-          const col = pct != null ? barColor(pct) : 'var(--ok-fg)';
-          const label = key.replace('requests.','req. ').replace('limits.','lim. ').replace('persistentvolumeclaims','PVCs');
-          html += `<div style="display:grid;grid-template-columns:160px 1fr auto;align-items:center;gap:8px;margin-bottom:6px">
-            <span style="font-size:12px;color:var(--text2)">${escHtml(label)}</span>
-            <div style="background:var(--surface2);border-radius:4px;height:10px;overflow:hidden;position:relative">
-              ${pct != null ? `<div style="width:${pct}%;height:100%;background:${col};border-radius:4px;transition:width .3s"></div>` : ''}
-            </div>
-            <span style="font-size:11px;color:${col};white-space:nowrap;min-width:110px;text-align:right">
-              ${escHtml(uv)} / ${escHtml(hv)} ${pct != null ? `(${pct}%)` : ''} ${trendArrow(rate)} ${etaLabel(pct, rate)}
-            </span>
-          </div>`;
-          anyShown = true;
+      for (const ns of (d.namespaces || [])) {
+        html += `<div class="quota-ns-card">`;
+        html += `<div class="quota-ns-hdr">&#128194; ${escHtml(ns.namespace)}`;
+        if (ns.error) html += ` <span style="color:var(--err-fg);font-size:11px;font-weight:400">${escHtml(ns.error)}</span>`;
+        html += '</div>';
+        if (!ns.quotas.length && !ns.error)
+          html += `<p style="color:var(--text3);font-size:12px;margin:0">No ResourceQuota found in this namespace.</p>`;
+        for (const q of ns.quotas) {
+          if (ns.quotas.length > 1)
+            html += `<div style="font-size:11px;color:var(--text3);margin-bottom:6px;font-weight:600;text-transform:uppercase;letter-spacing:.04em">${escHtml(q.name)}</div>`;
+          for (const res of q.resources) {
+            const pct = res.pct, bw = pct != null ? Math.min(100, Math.max(0, pct)) : 0;
+            html += `<div class="quota-res-row">
+              <span class="quota-res-name" title="${escHtml(res.resource)}">${escHtml(res.resource)}</span>
+              <div class="quota-res-bar"><div class="quota-bar-wrap"><div class="quota-bar ${barCls(pct)}" style="width:${bw}%"></div></div></div>
+              <span class="quota-res-val">${escHtml(res.used)} / ${escHtml(res.hard)}</span>
+              <span class="quota-res-pct" style="color:${pctCol(pct)}">${pct != null ? pct + '%' : '—'} ${trendArrow(res.resource)}</span>
+            </div>`;
+          }
         }
-        if (!anyShown) html += '<p style="color:var(--text3);font-size:12px">No standard quota keys found.</p>';
+        // LimitRange
+        if (ns.limitranges && ns.limitranges.length) {
+          html += `<div style="margin-top:10px;border-top:1px solid var(--border);padding-top:8px">`;
+          html += `<div style="font-size:11px;font-weight:700;color:var(--text3);text-transform:uppercase;letter-spacing:.04em;margin-bottom:6px">&#8989; LimitRange</div>`;
+          for (const lr of ns.limitranges) {
+            for (const lim of lr.limits) {
+              const keys = new Set([...Object.keys(lim.default||{}), ...Object.keys(lim.max||{}), ...Object.keys(lim.min||{})]);
+              if (!keys.size) continue;
+              html += `<div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:4px;font-size:12px;font-family:Consolas,monospace">`;
+              html += `<span class="badge badge-blue">${escHtml(lim.type)}</span>`;
+              for (const k of [...keys].sort()) {
+                const req = lim.defaultRequest?.[k]||'—', def = lim.default?.[k]||'—', mn = lim.min?.[k]||'—', mx = lim.max?.[k]||'—';
+                html += `<span style="color:var(--text2)"><span style="color:var(--text3)">${escHtml(k)}</span>: req=${escHtml(req)} lim=${escHtml(def)} [${escHtml(mn)}–${escHtml(mx)}]</span>`;
+              }
+              html += '</div>';
+            }
+          }
+          html += '</div>';
+        }
         html += '</div>';
       }
+
+      // Stale jobs section
+      const staleJobs = d.stale_jobs || [];
+      if (staleJobs.length) {
+        const totalMem = staleJobs.reduce((s, j) => s + (j.mem_bytes || 0), 0);
+        const fmtMem = b => b >= 1073741824 ? `${(b/1073741824).toFixed(1)} Gi` : b >= 1048576 ? `${Math.round(b/1048576)} Mi` : b > 0 ? `${Math.round(b/1024)} Ki` : '—';
+        html += `<div style="margin-top:16px"><div style="font-size:12px;font-weight:700;color:var(--warn-fg);margin-bottom:8px">&#9888; ${staleJobs.length} stale job(s) &gt;${staleHours}h${totalMem ? ` &mdash; declared mem: <span style="font-family:Consolas,monospace">${fmtMem(totalMem)}</span>` : ''}</div>`;
+        html += `<table class="pf-table"><thead><tr><th>Namespace</th><th>Job</th><th>Status</th><th>Age</th><th>Mem Requests</th><th>Action</th></tr></thead><tbody>`;
+        for (const job of staleJobs) {
+          const sc = job.status === 'Failed' ? 'badge-red' : 'badge-green';
+          html += `<tr>
+            <td style="color:var(--text3)">${escHtml(job.namespace)}</td>
+            <td>${escHtml(job.name)}</td>
+            <td><span class="badge ${sc}">${escHtml(job.status)}</span></td>
+            <td style="color:var(--text3)">${escHtml(job.age_human)}</td>
+            <td style="font-family:Consolas,monospace;color:var(--warn-fg)">${escHtml(job.mem_human||'—')}</td>
+            <td><button class="btn btn-sm btn-danger" data-ns="${escHtml(job.namespace)}" data-name="${escHtml(job.name)}"
+              onclick="deleteStaleJob(this.dataset.ns,this.dataset.name)">&#128465; Delete</button></td>
+          </tr>`;
+        }
+        html += '</tbody></table></div>';
+        if (deleteBtn) deleteBtn.style.display = '';
+      } else {
+        html += `<div style="margin-top:12px;color:var(--ok-fg);font-size:12px">&#10003; No stale jobs (threshold: ${staleHours}h).</div>`;
+        if (deleteBtn) deleteBtn.style.display = 'none';
+      }
+
+      // Orphaned PVCs
+      const pvcs = d.orphaned_pvcs || [];
+      if (pvcs.length) {
+        html += `<div style="margin-top:16px"><div style="font-size:12px;font-weight:700;color:var(--warn-fg);margin-bottom:8px">&#128190; ${pvcs.length} orphaned PVC(s) — bound but not mounted by any running pod</div>`;
+        html += `<table class="pf-table"><thead><tr><th>Namespace</th><th>PVC</th><th>Capacity</th><th>Storage Class</th></tr></thead><tbody>`;
+        for (const p of pvcs)
+          html += `<tr><td style="color:var(--text3)">${escHtml(p.namespace)}</td><td><b>${escHtml(p.name)}</b></td><td style="font-family:Consolas,monospace;color:var(--warn-fg)">${escHtml(p.capacity)}</td><td style="color:var(--text3)">${escHtml(p.storage_class)}</td></tr>`;
+        html += '</tbody></table></div>';
+      } else if (d.orphaned_pvcs !== undefined) {
+        html += `<div style="margin-top:12px;color:var(--ok-fg);font-size:12px">&#10003; No orphaned PVCs.</div>`;
+      }
+
       if (_quotaSnapHistory.length >= 2)
-        html += `<p style="font-size:10px;color:var(--text3);margin-top:4px">Burn rate computed from ${_quotaSnapHistory.length} snapshots over ${Math.round((_quotaSnapHistory[_quotaSnapHistory.length-1].ts - _quotaSnapHistory[0].ts)/60000)} min. Refresh to update.</p>`;
+        html += `<p style="font-size:10px;color:var(--text3);margin-top:8px">Burn rate from ${_quotaSnapHistory.length} snapshots over ${Math.round((_quotaSnapHistory[_quotaSnapHistory.length-1].ts - _quotaSnapHistory[0].ts)/60000)} min.</p>`;
+
       el.innerHTML = html;
-      if (ctEl) ctEl.textContent = ` — ${quotaSnapshot.length} quota(s)`;
+      const total = (d.namespaces || []).reduce((s, n) => s + (n.quotas || []).length, 0);
+      if (ctEl) ctEl.textContent = total ? ` — ${total} quota(s)` : ' — none';
     }
 
     // ══════════════════════════════════════════════════════════════════════════════
