@@ -784,8 +784,9 @@ def health_overview():
     top_thread.start()
     try:
         pods   = json.loads(stdout).get("items", [])
-        # Only include pods from namespaces starting with t-55547
-        pods = [pod for pod in pods if pod.get("metadata", {}).get("namespace", "").startswith("t-55547")]
+        # When all-namespaces, restrict to t-55547* namespaces only
+        if all_ns:
+            pods = [pod for pod in pods if pod.get("metadata", {}).get("namespace", "").startswith("t-55547")]
         counts       = {"running": 0, "pending": 0, "failed": 0,
                         "succeeded": 0, "unknown": 0, "total": len(pods)}
         alerts       = []
@@ -859,10 +860,26 @@ def health_overview():
             if b > 0: return f"{b/1024:.0f} Ki"
             return "—"
         total_pending_mem = fmt_mem(total_pending_mem_bytes)
+        # Quota snapshot (single-namespace only — skip for all-namespaces view)
+        quota_snapshot = []
+        if not all_ns:
+            try:
+                q_out, _, q_rc = run_cmd(
+                    [KUBECTL_CMD, "get", "resourcequota", "-n", ns, "-o", "json"], timeout=10)
+                if q_rc == 0:
+                    for q in json.loads(q_out).get("items", []):
+                        quota_snapshot.append({
+                            "name": q["metadata"]["name"],
+                            "hard": q.get("spec", {}).get("hard", {}),
+                            "used": q.get("status", {}).get("used", {}),
+                        })
+            except Exception:
+                pass
         return jsonify(ok=True, counts=counts, alerts=alerts,
                        pending_pods=pending_pods, top_pods=top_pods,
                        pending_pods_mem=pending_pods_mem,
-                       total_pending_mem=total_pending_mem)
+                       total_pending_mem=total_pending_mem,
+                       quota_snapshot=quota_snapshot)
     except Exception as e:
         top_thread.join(timeout=1)
         return jsonify(ok=False, error=str(e)), 500
@@ -1131,7 +1148,10 @@ def topology():
                                   "namespace": pns, "pods": []}
                 nodes[key]["pods"].append({"name": pname, "phase": phase, "restarts": restarts})
 
-    return jsonify(ok=True, topology=list(nodes.values()))
+    result = list(nodes.values())
+    if all_ns:
+        result = [n for n in result if n["namespace"].startswith("t-55547")]
+    return jsonify(ok=True, topology=result)
 
 
 # ─── Routes: Pod Exec (terminal) ──────────────────────────────────────────────
@@ -1177,6 +1197,7 @@ def hpa_patch():
     return jsonify(ok=(rc == 0), output=out, command=" ".join(args))
 
 
+@app.route("/api/hpa")
 def hpa_list():
     import logging
     ns     = request.args.get("namespace", "default")
@@ -1191,8 +1212,9 @@ def hpa_list():
         items = json.loads(stdout).get("items", [])
         if items is None:
             items = []
-        # Only include HPAs from namespaces starting with t-55547
-        items = [hpa for hpa in items if hpa.get("metadata", {}).get("namespace", "").startswith("t-55547")]
+        # When all-namespaces, restrict to t-55547* namespaces only
+        if all_ns:
+            items = [hpa for hpa in items if hpa.get("metadata", {}).get("namespace", "").startswith("t-55547")]
         result = []
         for hpa in items:
             meta   = hpa.get("metadata", {}) or {}
@@ -1288,6 +1310,8 @@ def ingresses_detail():
                 "tls_count": len(spec.get("tls", [])),
                 "rules":     rules,
             })
+        if all_ns:
+            result = [i for i in result if i["namespace"].startswith("t-55547")]
         return jsonify(ok=True, ingresses=result)
     except Exception as e:
         return jsonify(ok=False, error=str(e)), 500
@@ -1414,6 +1438,9 @@ def jobs_panel():
                 "active":     len(status.get("active", [])),
                 "last_sched": _fmt_age(last_secs) if last_secs is not None else "never",
             })
+    if all_ns:
+        jobs     = [j for j in jobs     if j["namespace"].startswith("t-55547")]
+        cronjobs = [c for c in cronjobs if c["namespace"].startswith("t-55547")]
     return jsonify(ok=True, jobs=jobs, cronjobs=cronjobs)
 
 
@@ -2025,6 +2052,229 @@ def triage_webhooks():
         return jsonify(ok=True, webhooks=webhooks)
     except Exception as ex:
         return jsonify(ok=False, error=str(ex))
+
+# ─── Routes: Network Policies ─────────────────────────────────────────────────
+
+@app.route("/api/netpolicies")
+def netpolicies():
+    ns     = request.args.get("namespace", "default")
+    all_ns = request.args.get("all", "false").lower() == "true"
+    ns_f   = ["--all-namespaces"] if all_ns else ["-n", ns]
+    stdout, stderr, rc = run_cmd(
+        [KUBECTL_CMD, "get", "networkpolicies", "-o", "json"] + ns_f, timeout=20)
+    if rc != 0:
+        return jsonify(ok=False, error=stderr), 500
+    try:
+        items = json.loads(stdout).get("items", [])
+        if all_ns:
+            items = [i for i in items
+                     if i.get("metadata", {}).get("namespace", "").startswith("t-55547")]
+
+        def _peer(p):
+            parts = []
+            if "podSelector" in p:
+                lbls = (p["podSelector"] or {}).get("matchLabels", {})
+                parts.append("pod:" + (", ".join(f"{k}={v}" for k, v in lbls.items()) or "any"))
+            if "namespaceSelector" in p:
+                lbls = (p["namespaceSelector"] or {}).get("matchLabels", {})
+                parts.append("ns:" + (", ".join(f"{k}={v}" for k, v in lbls.items()) or "any"))
+            if "ipBlock" in p:
+                parts.append("ip:" + (p["ipBlock"] or {}).get("cidr", "?"))
+            return " + ".join(parts) if parts else "any"
+
+        result = []
+        for np in items:
+            meta = np.get("metadata", {})
+            spec = np.get("spec", {})
+            ps   = spec.get("podSelector") or {}
+            ps_labels = ps.get("matchLabels", {})
+            ps_str = ", ".join(f"{k}={v}" for k, v in ps_labels.items()) if ps_labels else "(all pods)"
+            ingress_rules = []
+            for rule in (spec.get("ingress") or []):
+                froms = [_peer(p) for p in (rule.get("from") or [])] or ["any"]
+                ports = [f"{p.get('protocol','TCP')}/{p.get('port','*')}"
+                         for p in (rule.get("ports") or [])] or ["all ports"]
+                ingress_rules.append({"from": froms, "ports": ports})
+            egress_rules = []
+            for rule in (spec.get("egress") or []):
+                tos   = [_peer(p) for p in (rule.get("to") or [])] or ["any"]
+                ports = [f"{p.get('protocol','TCP')}/{p.get('port','*')}"
+                         for p in (rule.get("ports") or [])] or ["all ports"]
+                egress_rules.append({"to": tos, "ports": ports})
+            result.append({
+                "name":          meta.get("name", ""),
+                "namespace":     meta.get("namespace", ns),
+                "pod_selector":  ps_str,
+                "policy_types":  spec.get("policyTypes", []),
+                "ingress_rules": ingress_rules,
+                "egress_rules":  egress_rules,
+            })
+        return jsonify(ok=True, policies=result)
+    except Exception as e:
+        return jsonify(ok=False, error=str(e)), 500
+
+
+# ─── Routes: Compliance Checker ────────────────────────────────────────────────
+
+@app.route("/api/compliance")
+def compliance_check():
+    ns = request.args.get("namespace", "default")
+    checks = []
+
+    def _chk(name, category, severity, description, remediation, passed, detail=""):
+        checks.append({"name": name, "category": category, "severity": severity,
+                        "description": description, "remediation": remediation,
+                        "passed": passed, "detail": detail})
+
+    # ── Governance ────────────────────────────────────────────────────────────
+    out, _, rc = run_cmd([KUBECTL_CMD, "get", "resourcequota", "-n", ns, "-o", "json"], timeout=10)
+    if rc == 0:
+        items = json.loads(out).get("items", [])
+        _chk("Resource Quota", "Governance", "high",
+             "Namespace has a ResourceQuota to prevent resource starvation",
+             f"kubectl create resourcequota default --hard=cpu=4,memory=8Gi,pods=20 -n {ns}",
+             bool(items),
+             f"{len(items)} quota(s): {', '.join(i['metadata']['name'] for i in items)}" if items
+             else "No ResourceQuota found")
+
+    out, _, rc = run_cmd([KUBECTL_CMD, "get", "limitrange", "-n", ns, "-o", "json"], timeout=10)
+    if rc == 0:
+        items = json.loads(out).get("items", [])
+        _chk("Limit Range", "Governance", "medium",
+             "Namespace has a LimitRange to set default resource requests/limits",
+             "Create a LimitRange with sensible default CPU/memory requests and limits",
+             bool(items),
+             f"{len(items)} limitrange(s): {', '.join(i['metadata']['name'] for i in items)}" if items
+             else "No LimitRange found")
+
+    # ── Security ──────────────────────────────────────────────────────────────
+    out, _, rc = run_cmd([KUBECTL_CMD, "get", "networkpolicy", "-n", ns, "-o", "json"], timeout=10)
+    if rc == 0:
+        items = json.loads(out).get("items", [])
+        _chk("Network Policy", "Security", "high",
+             "Namespace has NetworkPolicy to restrict pod-to-pod traffic",
+             "Create a default-deny NetworkPolicy and add explicit allow rules",
+             bool(items),
+             f"{len(items)} policy(s): {', '.join(i['metadata']['name'] for i in items)}" if items
+             else "No NetworkPolicy found")
+
+    # ── Pod-level checks ──────────────────────────────────────────────────────
+    pod_out, _, pod_rc = run_cmd([KUBECTL_CMD, "get", "pods", "-n", ns, "-o", "json"], timeout=15)
+    if pod_rc == 0:
+        pods = [p for p in json.loads(pod_out).get("items", [])
+                if p.get("status", {}).get("phase") not in ("Succeeded", "Failed")]
+
+        latest_ctrs, no_req_ctrs, no_lim_ctrs = [], [], []
+        root_ctrs, priv_ctrs = [], []
+        no_live_pods, no_ready_pods = [], []
+
+        for pod in pods:
+            pname = pod["metadata"]["name"]
+            spec  = pod.get("spec", {})
+            all_ctrs = (spec.get("containers") or []) + (spec.get("initContainers") or [])
+            if not any(c.get("livenessProbe")  for c in spec.get("containers") or []):
+                no_live_pods.append(pname)
+            if not any(c.get("readinessProbe") for c in spec.get("containers") or []):
+                no_ready_pods.append(pname)
+            for c in all_ctrs:
+                cref = f"{pname}/{c['name']}"
+                img  = c.get("image", "")
+                tag  = img.split(":")[-1] if ":" in img.split("/")[-1] else ""
+                if not tag or tag == "latest":
+                    latest_ctrs.append(cref)
+                res = c.get("resources") or {}
+                if not (res.get("requests") or {}).get("cpu"):
+                    no_req_ctrs.append(cref)
+                if not (res.get("limits") or {}).get("memory"):
+                    no_lim_ctrs.append(cref)
+                sc = c.get("securityContext") or {}
+                if sc.get("runAsUser") == 0 or sc.get("runAsNonRoot") is False:
+                    root_ctrs.append(cref)
+                if sc.get("privileged"):
+                    priv_ctrs.append(cref)
+
+        def _fmt(lst):
+            s = ", ".join(lst[:3])
+            return s + (f" (+{len(lst)-3} more)" if len(lst) > 3 else "")
+
+        total = len(pods)
+        _chk("No Latest Image Tags", "Security", "medium",
+             "No containers use :latest or untagged images (unpredictable deployments)",
+             "Pin all images to a specific version tag, e.g. image:1.2.3",
+             not latest_ctrs,
+             f"{len(latest_ctrs)} container(s) untagged/latest: {_fmt(latest_ctrs)}" if latest_ctrs
+             else f"All containers across {total} pod(s) use pinned tags")
+
+        _chk("Resource Requests Defined", "Reliability", "high",
+             "All containers have CPU/memory requests so the scheduler places pods correctly",
+             "Add resources.requests.cpu and resources.requests.memory to every container",
+             not no_req_ctrs,
+             f"{len(no_req_ctrs)} container(s) missing CPU requests: {_fmt(no_req_ctrs)}" if no_req_ctrs
+             else "All containers have requests defined")
+
+        _chk("Resource Limits Defined", "Reliability", "high",
+             "All containers have resource limits to prevent runaway memory consumption",
+             "Add resources.limits.cpu and resources.limits.memory to every container",
+             not no_lim_ctrs,
+             f"{len(no_lim_ctrs)} container(s) missing memory limits: {_fmt(no_lim_ctrs)}" if no_lim_ctrs
+             else "All containers have limits defined")
+
+        _chk("No Root Containers", "Security", "critical",
+             "No containers run as UID 0 (root), which escalates blast radius of a breach",
+             "Set securityContext.runAsNonRoot: true or runAsUser to a non-zero UID",
+             not root_ctrs,
+             f"{len(root_ctrs)} container(s) running as root: {_fmt(root_ctrs)}" if root_ctrs
+             else "No root containers detected")
+
+        _chk("No Privileged Containers", "Security", "critical",
+             "No containers have securityContext.privileged: true",
+             "Remove privileged: true — use specific capabilities (securityContext.capabilities.add) instead",
+             not priv_ctrs,
+             f"{len(priv_ctrs)} privileged container(s): {_fmt(priv_ctrs)}" if priv_ctrs
+             else "No privileged containers detected")
+
+        _chk("Liveness Probes", "Reliability", "medium",
+             "All pods have a livenessProbe so Kubernetes restarts hung containers automatically",
+             "Add livenessProbe (httpGet, exec, or tcpSocket) to each container spec",
+             not no_live_pods,
+             f"{len(no_live_pods)} pod(s) missing liveness probe: {_fmt(no_live_pods)}" if no_live_pods
+             else "All pods have liveness probes")
+
+        _chk("Readiness Probes", "Reliability", "medium",
+             "All pods have a readinessProbe so traffic is only sent to ready pods",
+             "Add readinessProbe to each container spec",
+             not no_ready_pods,
+             f"{len(no_ready_pods)} pod(s) missing readiness probe: {_fmt(no_ready_pods)}" if no_ready_pods
+             else "All pods have readiness probes")
+
+    # ── PodDisruptionBudget ───────────────────────────────────────────────────
+    out, _, rc = run_cmd([KUBECTL_CMD, "get", "pdb", "-n", ns, "-o", "json"], timeout=10)
+    if rc == 0:
+        items = json.loads(out).get("items", [])
+        _chk("Pod Disruption Budget", "Reliability", "medium",
+             "Production workloads have PodDisruptionBudgets to survive node drains/maintenance",
+             f"kubectl create poddisruptionbudget <name> --min-available=1 -n {ns}",
+             bool(items),
+             f"{len(items)} PDB(s): {', '.join(i['metadata']['name'] for i in items)}" if items
+             else "No PodDisruptionBudget found")
+
+    # ── Stale failed jobs ─────────────────────────────────────────────────────
+    out, _, rc = run_cmd([KUBECTL_CMD, "get", "jobs", "-n", ns, "-o", "json"], timeout=10)
+    if rc == 0:
+        failed = [j["metadata"]["name"] for j in json.loads(out).get("items", [])
+                  if any(c.get("type") == "Failed" and c.get("status") == "True"
+                         for c in j.get("status", {}).get("conditions", []))]
+        _chk("No Failed Jobs", "Operations", "low",
+             "No failed jobs are lingering in the namespace",
+             f"kubectl delete jobs --field-selector status.successful=0 -n {ns}",
+             not failed,
+             f"{len(failed)} failed job(s): {', '.join(failed[:5])}" if failed else "No failed jobs")
+
+    passed = sum(1 for c in checks if c["passed"])
+    total  = len(checks)
+    score  = round(passed / total * 100) if total else 0
+    return jsonify(ok=True, checks=checks, passed=passed, total=total, score=score, namespace=ns)
+
 
 def _pty_set_size(fd, rows, cols):
     """Resize a Unix PTY to the given dimensions."""
