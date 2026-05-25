@@ -278,6 +278,7 @@
       white-space: nowrap;
       font-family: Consolas, monospace;
       color: var(--text);
+      position: relative;
     }
 
     .res-table tr.selected td {
@@ -306,15 +307,25 @@
     .dark .res-table tbody tr.row-warn > td { background: rgba(251,191,36,0.07); }
     .dark .res-table tbody tr.row-warn.selected > td { background: rgba(251,191,36,0.20) !important; }
 
-    /* ── Cell click-to-copy feedback ─────────────────────────────────────────── */
-    .res-table tbody td {
+    /* ── Cell copy button (appears on individual cell hover) ─────────────────── */
+    .cell-copy-btn {
+      display: none;
+      position: absolute;
+      top: 3px;
+      right: 3px;
+      font-size: 10px;
+      line-height: 1.4;
+      padding: 0 4px;
+      background: var(--surface3);
+      border: 1px solid var(--border2);
+      border-radius: 3px;
       cursor: pointer;
-      transition: outline 0.1s;
+      color: var(--brand);
+      z-index: 2;
+      font-family: sans-serif;
     }
-    .res-table tbody td.cell-copied {
-      outline: 1px solid var(--brand);
-      outline-offset: -1px;
-    }
+    .res-table tbody td:hover .cell-copy-btn { display: inline-block; }
+    .res-table tbody td.cell-copied { outline: 1px solid var(--brand); outline-offset: -1px; }
 
     /* ── Pod quick-filter chips ───────────────────────────────────────────────── */
     .pod-chip {
@@ -1957,7 +1968,7 @@
         <p id="confirm-msg" style="color:var(--text2);font-size:13px;margin-bottom:18px;white-space:pre-wrap"></p>
         <div style="display:flex;gap:8px">
           <button id="confirm-ok-btn" class="btn btn-danger" style="flex:1" onclick="_confirmExec()">Confirm</button>
-          <button onclick="closeModal('confirm-modal')" class="btn" style="flex:1">Cancel</button>
+          <button onclick="_confirmCancel()" class="btn" style="flex:1">Cancel</button>
         </div>
       </div>
     </div>
@@ -2040,9 +2051,6 @@
       // Restore dark mode preference
       if (localStorage.getItem('ske_dark') === '1') toggleDark();
 
-      // Wire up ⌘+click cell-copy (one delegated listener, never needs re-attaching)
-      initCellCopy();
-
       document.getElementById('chk-save').addEventListener('change', () => {
         document.getElementById('env-name-row').style.display =
           document.getElementById('chk-save').checked ? 'block' : 'none';
@@ -2119,7 +2127,8 @@
     }
     async function deleteEnv() {
       const name = document.getElementById('env-select').value;
-      if (!name || !confirm(`Delete environment "${name}"?`)) return;
+      if (!name) return;
+      if (!await _confirm('Delete Environment', `Delete environment "${name}"? This cannot be undone.`, 'Delete', 'btn-danger')) return;
       await fetch(`/api/config/${encodeURIComponent(name)}`, { method: 'DELETE' });
       await loadEnvList(); toast('Deleted', `Environment "${name}" removed.`, 'warn');
     }
@@ -2170,8 +2179,8 @@
       }
       await reloadNs(); await refresh();
     }
-    function doLogout() {
-      if (!confirm('Log out? Your current session will end.')) return; // Fix #14
+    async function doLogout() {
+      if (!await _confirm('Log out?', 'Your current session will end.', 'Log out', 'btn-danger')) return;
       S.logSource && S.logSource.close(); toggleAutoRefresh(false);
       // Fix #3: stop session poll
       if (S.sessionTimer) { clearInterval(S.sessionTimer); S.sessionTimer = null; }
@@ -2372,7 +2381,7 @@
     async function removeNs() {
       const ns = document.getElementById('ns-select').value;
       if (!S.pinnedNs.includes(ns)) { toast('Not pinned', `"${ns}" is a cluster namespace.`, 'warn'); return; }
-      if (!confirm(`Remove "${ns}" from pinned list?`)) return;
+      if (!await _confirm('Remove Namespace', `Remove "${ns}" from your pinned list?`, 'Remove', 'btn-danger')) return;
       S.pinnedNs = S.pinnedNs.filter(n => n !== ns);
       if (S.activeEnv) await fetch(`/api/config/${encodeURIComponent(S.activeEnv)}/namespaces/${encodeURIComponent(ns)}`, { method: 'DELETE' });
       await reloadNs(); await refresh(); // Fix #6: refresh resource table for the newly-selected namespace
@@ -2485,8 +2494,8 @@
         else if (/PENDING|TERMINAT|UNKNOWN|INIT/.test(statusText)) rowStatusCls = 'row-warn';
         const tds = cells.map((c, ci) => {
           const display = ci === statusColIdx ? statusBadge(c) : escHtml(c);
-          // data-copy holds the raw value safely; ⌘+click to copy (handled by delegated listener on table-wrapper)
-          return `<td data-copy="${escHtml(c)}" title="${escHtml(c)} — ⌘+click to copy">${display}</td>`;
+          // Copy button appears on cell hover; uses _clipWrite (execCommand) — works in pywebview
+          return `<td data-copy="${escHtml(c)}" title="${escHtml(c)}">${display}<button class="cell-copy-btn" onclick="copyCellBtn(event,this)" tabindex="-1">⧉</button></td>`;
         }).join('');
         // Double-click opens YAML (more actionable than Describe)
         return `<tr class="${selCls} ${rowStatusCls}" data-ri="${ri}" onclick="selectRow(event,${ri})" ondblclick="doYaml()" oncontextmenu="showCtxMenu(event,${ri})">${tds}</tr>`;
@@ -2546,23 +2555,17 @@
       document.getElementById('sel-info').textContent = n > 0 ? `${n} selected` : '';
     }
 
-    // ── Cell click-to-copy (⌘+click / Ctrl+click on a cell) ─────────────────────
-    // Delegated listener is wired up once in initCellCopy() called at page load.
-    function initCellCopy() {
-      document.getElementById('table-wrapper').addEventListener('click', function(e) {
-        // Require ⌘ (Mac) or Ctrl (Win/Linux) — keeps normal clicks for row selection
-        if (!e.metaKey && !e.ctrlKey) return;
-        const td = e.target.closest('#res-tbody td[data-copy]');
-        if (!td) return;
-        e.stopImmediatePropagation(); // don't also multi-select the row
-        const val = td.dataset.copy;
-        navigator.clipboard.writeText(val).then(() => {
-          td.classList.add('cell-copied');
-          setTimeout(() => td.classList.remove('cell-copied'), 700);
-          const preview = val.length > 50 ? val.slice(0, 50) + '…' : val;
-          toast('Copied', preview, 'ok');
-        }).catch(() => toast('Copy failed', 'Clipboard not available', 'warn'));
-      });
+    // ── Cell copy button handler ──────────────────────────────────────────────────
+    // The ⧉ button inside each TD; uses execCommand fallback (works in pywebview/WKWebView)
+    function copyCellBtn(e, btn) {
+      e.stopPropagation(); // don't also trigger row selection click
+      const td = btn.closest('td');
+      const val = td ? td.dataset.copy : '';
+      if (!val) return;
+      copyText(val, val.length > 60 ? val.slice(0, 60) + '…' : `"${val}" copied`);
+      td.classList.add('cell-copied');
+      btn.textContent = '✓';
+      setTimeout(() => { td.classList.remove('cell-copied'); btn.textContent = '⧉'; }, 800);
     }
 
     // ── Pod quick-filter chips ─────────────────────────────────────────────────────
@@ -2623,7 +2626,9 @@
     }
     async function doDelete() {
       const names = selectedNames(); if (!names.length) return;
-      if (!confirm(`Delete ${names.length} ${S.resource}(s) in "${S.namespace}"?\n${names.slice(0, 5).join(', ')}${names.length > 5 ? '…' : ''}\n\nThis cannot be undone!`)) return;
+      if (!await _confirm('Delete Resources',
+        `Delete ${names.length} ${S.resource}(s) in "${S.namespace}"?\n${names.slice(0, 5).join(', ')}${names.length > 5 ? '…' : ''}\n\nThis cannot be undone!`,
+        'Delete', 'btn-danger')) return;
       switchTab('output');
       const r = await fetch('/api/delete', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ type: S.resource, names, namespace: S.namespace, all: S.allNs }) });
       const d = await r.json();
@@ -2633,7 +2638,9 @@
     async function doRestart() {
       const names = selectedNames(); if (!names.length) return;
       if (!['deployments', 'daemonsets', 'statefulsets'].includes(S.resource)) { toast('Not supported', 'Restart works for deployments, daemonsets, statefulsets.', 'warn'); return; }
-      if (!confirm(`Rolling restart ${names.length} ${S.resource}(s)?\n\n${names.join(', ')}`)) return;
+      if (!await _confirm('Rolling Restart',
+        `Restart ${names.length} ${S.resource}(s)?\n\n${names.join(', ')}`,
+        'Restart', 'btn-brand')) return;
       switchTab('output');
       for (const name of names) {
         const r = await fetch('/api/restart', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ type: S.resource, name, namespace: S.namespace }) });
@@ -2701,7 +2708,9 @@
       const label = document.getElementById('rollout-resource-label').textContent;
       const name = label.split('/')[1]?.split(' ')[0]; if (!name) return;
       const revision = document.getElementById('rollout-revision').value.trim();
-      if (!confirm(`Rollback ${S.resource}/${name}${revision ? ' to revision ' + revision : ' (to previous)'}?`)) return;
+      if (!await _confirm('Rollback',
+        `Rollback ${S.resource}/${name}${revision ? ' to revision ' + revision : ' (to previous)'}?`,
+        'Rollback', 'btn-danger')) return;
       const r = await fetch('/api/rollout/undo', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ type: S.resource, name, namespace: S.namespace, revision }) });
       const d = await r.json(); closeModal('rollout-modal'); switchTab('output');
       appendOutput(`» ${d.command}\n`, 'cmd'); appendOutput(d.output + '\n', d.ok ? 'ok' : 'err');
@@ -2739,7 +2748,9 @@
     function editorAddKey() { document.getElementById('editor-rows').appendChild(makeEditorRow('', '')); }
     async function saveEditor() {
       const m = document.getElementById('editor-modal');
-      if (!confirm(`Save changes to ${m.dataset.resType}/${m.dataset.name} in "${m.dataset.namespace}"?\n\nThis will apply the updated data to the cluster.`)) return;
+      if (!await _confirm('Save Changes',
+        `Save changes to ${m.dataset.resType}/${m.dataset.name} in "${m.dataset.namespace}"?\n\nThis will apply the updated data to the cluster.`,
+        'Save', 'btn-success')) return;
       const data = {};
       for (const row of document.querySelectorAll('#editor-rows .editor-row')) {
         const k = row.querySelector('input').value.trim(), v = row.querySelector('textarea').value;
@@ -2776,7 +2787,7 @@
     async function applyYaml() {
       const yaml = document.getElementById('yaml-edit').value.trim();
       if (!yaml) { toast('Empty', 'Nothing to apply.', 'warn'); return; }
-      if (!confirm('Apply this YAML to the cluster?\n\nThis will create or update resources.')) return;
+      if (!await _confirm('Apply YAML', 'Apply this YAML to the cluster?\n\nThis will create or update resources.', 'Apply', 'btn-success')) return;
       const r = await fetch('/api/apply', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ yaml }) });
       const d = await r.json(); cancelYamlEdit(); switchTab('output');
       appendOutput(`» ${d.command}\n`, 'cmd'); appendOutput(d.output + '\n', d.ok ? 'ok' : 'err');
@@ -3120,7 +3131,7 @@
       const idx = parseInt(sel.value);
       if (isNaN(idx) || !_savedCmds[idx]) { toast('Nothing selected', 'Select a saved command first.', 'warn'); return; }
       const label = _savedCmds[idx].label;
-      if (!confirm(`Delete saved command "${label}"?`)) return;
+      if (!await _confirm('Delete Command', `Delete saved command "${label}"?`, 'Delete', 'btn-danger')) return;
       const r = await fetch(`/api/commands/${idx}`, { method: 'DELETE' });
       const d = await r.json();
       _savedCmds = d.commands || [];
@@ -3435,16 +3446,39 @@
     // ── Health tab actions ────────────────────────────────────────────────────────
     function escAttr(s) { return String(s).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/'/g, '&#39;').replace(/</g, '&lt;'); }
     let _confirmOkCb = null;
+    let _confirmResolve = null;
+
     function showConfirm(title, msg, okLabel, okClass, cb) {
       document.getElementById('confirm-title').textContent = title;
       document.getElementById('confirm-msg').textContent = msg;
       const btn = document.getElementById('confirm-ok-btn');
       btn.textContent = okLabel; btn.className = `btn ${okClass || 'btn-danger'}`; btn.style.flex = '1';
-      _confirmOkCb = cb; openModal('confirm-modal');
+      _confirmOkCb = cb; _confirmResolve = null; openModal('confirm-modal');
     }
+
+    // Promise-based confirm — replaces native confirm() so no browser "127.0.0.1:5000 says" banner
+    function _confirm(title, msg, okLabel = 'Confirm', okClass = 'btn-danger') {
+      return new Promise(resolve => {
+        if (_confirmResolve) { _confirmResolve(false); } // dismiss any stacked dialog
+        _confirmResolve = resolve; _confirmOkCb = null;
+        document.getElementById('confirm-title').textContent = title;
+        document.getElementById('confirm-msg').textContent = msg;
+        const btn = document.getElementById('confirm-ok-btn');
+        btn.textContent = okLabel; btn.className = `btn ${okClass || 'btn-danger'}`; btn.style.flex = '1';
+        openModal('confirm-modal');
+      });
+    }
+
     function _confirmExec() {
       closeModal('confirm-modal');
       if (_confirmOkCb) { const cb = _confirmOkCb; _confirmOkCb = null; cb(); }
+      if (_confirmResolve) { const r = _confirmResolve; _confirmResolve = null; r(true); }
+    }
+
+    function _confirmCancel() {
+      closeModal('confirm-modal');
+      _confirmOkCb = null;
+      if (_confirmResolve) { const r = _confirmResolve; _confirmResolve = null; r(false); }
     }
     async function _healthShowPodModal(titleHtml, pod, ns, apiUrl) {
       document.getElementById('health-modal-cmd-title').innerHTML = titleHtml;
@@ -3782,7 +3816,7 @@
     }
 
     async function deleteStaleJob(ns, name) {
-      if (!confirm(`Delete job "${name}" in namespace "${ns}"?\n\nThis will free up quota but cannot be undone.`)) return;
+      if (!await _confirm('Delete Job', `Delete job "${name}" in namespace "${ns}"?\n\nThis will free up quota but cannot be undone.`, 'Delete', 'btn-danger')) return;
       const r = await fetch('/api/delete', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ type: 'jobs', names: [name], namespace: ns })
@@ -3802,10 +3836,9 @@
       const names = jobs.map(j => j.name).join(', ');
       const ns = jobs[0]?.namespace || S.namespace;
       const label = `in namespace "${ns}"`;
-      // First confirmation
-      if (!confirm(`Delete ALL ${jobs.length} stale job(s) ${label}?\n\n${jobs.map(j=>j.name).join(', ')}\n\nClick OK to proceed to final confirmation.`)) return;
-      // Second confirmation
-      if (!confirm(`FINAL CONFIRMATION\n\nPermanently delete ${jobs.length} job(s) ${label}.\nThis cannot be undone.\n\nAre you absolutely sure?`)) return;
+      if (!await _confirm('Delete All Stale Jobs',
+        `Permanently delete ALL ${jobs.length} stale job(s) ${label}:\n\n${jobs.map(j=>j.name).join('\n')}\n\nThis cannot be undone.`,
+        `Delete ${jobs.length} Jobs`, 'btn-danger')) return;
 
       let ok = 0, fail = 0;
       const byNs = {};
@@ -4412,7 +4445,7 @@
 
     // ── Jobs / CronJobs actions ───────────────────────────────────────────────────
     async function triggerCronJob(name, ns) {
-      if (!confirm(`Trigger CronJob "${name}" manually in "${ns}"?\n\nThis will create a new Job immediately.`)) return;
+      if (!await _confirm('Trigger CronJob', `Trigger CronJob "${name}" manually in "${ns}"?\n\nThis will create a new Job immediately.`, 'Trigger', 'btn-brand')) return;
       const r = await fetch('/api/cronjob/trigger', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ name, namespace: ns })
