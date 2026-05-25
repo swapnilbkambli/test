@@ -2040,6 +2040,9 @@
       // Restore dark mode preference
       if (localStorage.getItem('ske_dark') === '1') toggleDark();
 
+      // Wire up ⌘+click cell-copy (one delegated listener, never needs re-attaching)
+      initCellCopy();
+
       document.getElementById('chk-save').addEventListener('change', () => {
         document.getElementById('env-name-row').style.display =
           document.getElementById('chk-save').checked ? 'block' : 'none';
@@ -2482,8 +2485,8 @@
         else if (/PENDING|TERMINAT|UNKNOWN|INIT/.test(statusText)) rowStatusCls = 'row-warn';
         const tds = cells.map((c, ci) => {
           const display = ci === statusColIdx ? statusBadge(c) : escHtml(c);
-          // Each cell: click selects row (handled by tr) + copies value; title shows raw value for hover preview
-          return `<td title="${escHtml(c)}" onclick="copyCell(event,${JSON.stringify(c)})">${display}</td>`;
+          // data-copy holds the raw value safely; ⌘+click to copy (handled by delegated listener on table-wrapper)
+          return `<td data-copy="${escHtml(c)}" title="${escHtml(c)} — ⌘+click to copy">${display}</td>`;
         }).join('');
         // Double-click opens YAML (more actionable than Describe)
         return `<tr class="${selCls} ${rowStatusCls}" data-ri="${ri}" onclick="selectRow(event,${ri})" ondblclick="doYaml()" oncontextmenu="showCtxMenu(event,${ri})">${tds}</tr>`;
@@ -2543,15 +2546,23 @@
       document.getElementById('sel-info').textContent = n > 0 ? `${n} selected` : '';
     }
 
-    // ── Cell click-to-copy ────────────────────────────────────────────────────────
-    function copyCell(e, val) {
-      // Row's onclick will still fire (selectRow); this just also copies the cell value
-      if (!val) return;
-      navigator.clipboard.writeText(val).then(() => {
-        const td = e.currentTarget;
-        td.classList.add('cell-copied');
-        setTimeout(() => td.classList.remove('cell-copied'), 600);
-      }).catch(() => {});
+    // ── Cell click-to-copy (⌘+click / Ctrl+click on a cell) ─────────────────────
+    // Delegated listener is wired up once in initCellCopy() called at page load.
+    function initCellCopy() {
+      document.getElementById('table-wrapper').addEventListener('click', function(e) {
+        // Require ⌘ (Mac) or Ctrl (Win/Linux) — keeps normal clicks for row selection
+        if (!e.metaKey && !e.ctrlKey) return;
+        const td = e.target.closest('#res-tbody td[data-copy]');
+        if (!td) return;
+        e.stopImmediatePropagation(); // don't also multi-select the row
+        const val = td.dataset.copy;
+        navigator.clipboard.writeText(val).then(() => {
+          td.classList.add('cell-copied');
+          setTimeout(() => td.classList.remove('cell-copied'), 700);
+          const preview = val.length > 50 ? val.slice(0, 50) + '…' : val;
+          toast('Copied', preview, 'ok');
+        }).catch(() => toast('Copy failed', 'Clipboard not available', 'warn'));
+      });
     }
 
     // ── Pod quick-filter chips ─────────────────────────────────────────────────────
