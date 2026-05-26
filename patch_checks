@@ -1,0 +1,750 @@
+#!/usr/bin/env bash
+# =============================================================================
+#  patch_checks.sh  –  Comprehensive Linux Server Patching Pre/Post Checks
+# =============================================================================
+#  Usage:
+#    Pre-patch  : sudo ./patch_checks.sh pre
+#    Post-patch : sudo ./patch_checks.sh post
+#    Compare    : sudo ./patch_checks.sh compare
+#    Full cycle : sudo ./patch_checks.sh pre   (patch the server)
+#                 sudo ./patch_checks.sh post
+#                 sudo ./patch_checks.sh compare
+# =============================================================================
+
+set -euo pipefail
+
+# ── Configuration ────────────────────────────────────────────────────────────
+REPORT_DIR="/var/log/patch_checks"
+TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
+HOSTNAME=$(hostname -f 2>/dev/null || hostname)
+MODE="${1:-}"
+
+PRE_DIR="${REPORT_DIR}/pre"
+POST_DIR="${REPORT_DIR}/post"
+DIFF_DIR="${REPORT_DIR}/diff"
+
+PRE_REPORT="${REPORT_DIR}/PRE_PATCH_${HOSTNAME}.txt"
+POST_REPORT="${REPORT_DIR}/POST_PATCH_${HOSTNAME}.txt"
+COMPARE_REPORT="${REPORT_DIR}/COMPARISON_${HOSTNAME}_${TIMESTAMP}.txt"
+
+# Colours (disabled if not a terminal)
+if [ -t 1 ]; then
+  RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
+  CYAN='\033[0;36m'; BOLD='\033[1m'; RESET='\033[0m'
+else
+  RED=''; GREEN=''; YELLOW=''; CYAN=''; BOLD=''; RESET=''
+fi
+
+# ── Helpers ──────────────────────────────────────────────────────────────────
+log()     { echo -e "${CYAN}[$(date '+%H:%M:%S')]${RESET} $*"; }
+success() { echo -e "${GREEN}[✔]${RESET} $*"; }
+warn()    { echo -e "${YELLOW}[!]${RESET} $*"; }
+error()   { echo -e "${RED}[✘]${RESET} $*" >&2; }
+header()  { echo -e "\n${BOLD}${CYAN}══════════════════════════════════════════${RESET}"; \
+            echo -e "${BOLD}${CYAN}  $*${RESET}"; \
+            echo -e "${BOLD}${CYAN}══════════════════════════════════════════${RESET}"; }
+
+section() {   # section TITLE FILE
+  local title="$1" file="$2"
+  echo "" >> "$file"
+  echo "########################################" >> "$file"
+  echo "# $title" >> "$file"
+  echo "# $(date)" >> "$file"
+  echo "########################################" >> "$file"
+}
+
+check_root() {
+  if [[ $EUID -ne 0 ]]; then
+    error "This script must be run as root (use sudo)."
+    exit 1
+  fi
+}
+
+ensure_dirs() {
+  mkdir -p "$PRE_DIR" "$POST_DIR" "$DIFF_DIR"
+}
+
+cmd_exists() { command -v "$1" &>/dev/null; }
+
+safe_run() {   # safe_run "description" command [args...]
+  local desc="$1"; shift
+  if "$@" 2>/dev/null; then
+    return 0
+  else
+    echo "  [command unavailable or failed: $desc]"
+    return 0
+  fi
+}
+
+# ── Collection Functions ──────────────────────────────────────────────────────
+
+collect_system_info() {
+  local out="$1"
+  section "SYSTEM INFORMATION" "$out"
+  {
+    echo "Hostname        : $(hostname -f 2>/dev/null || hostname)"
+    echo "Date/Time       : $(date)"
+    echo "Uptime          : $(uptime -p 2>/dev/null || uptime)"
+    echo "Kernel          : $(uname -r)"
+    echo "OS Release      :"
+    cat /etc/os-release 2>/dev/null || cat /etc/redhat-release 2>/dev/null || echo "Unknown"
+    echo ""
+    echo "Last Boot       : $(who -b 2>/dev/null || last reboot 2>/dev/null | head -1)"
+    echo "Current Users   :"
+    who 2>/dev/null || echo "N/A"
+  } >> "$out"
+}
+
+collect_packages() {
+  local out="$1" snap_out="$2"
+  section "INSTALLED PACKAGES" "$out"
+  if cmd_exists rpm; then
+    rpm -qa --queryformat '%{NAME}-%{VERSION}-%{RELEASE}.%{ARCH}\n' 2>/dev/null | sort >> "$out"
+  elif cmd_exists dpkg; then
+    dpkg -l 2>/dev/null | grep '^ii' | awk '{print $2"\t"$3}' | sort >> "$out"
+  else
+    echo "No supported package manager found." >> "$out"
+  fi
+  # Snap packages
+  section "SNAP PACKAGES" "$out"
+  if cmd_exists snap; then
+    snap list 2>/dev/null >> "$out" || echo "N/A" >> "$out"
+  else
+    echo "snap not installed" >> "$out"
+  fi
+  # Flatpak
+  section "FLATPAK PACKAGES" "$out"
+  if cmd_exists flatpak; then
+    flatpak list 2>/dev/null >> "$out" || echo "N/A" >> "$out"
+  else
+    echo "flatpak not installed" >> "$out"
+  fi
+}
+
+collect_kernel_modules() {
+  local out="$1"
+  section "LOADED KERNEL MODULES" "$out"
+  lsmod 2>/dev/null | sort >> "$out" || echo "N/A" >> "$out"
+}
+
+collect_services() {
+  local out="$1"
+  section "SYSTEMD SERVICES (running)" "$out"
+  if cmd_exists systemctl; then
+    systemctl list-units --type=service --state=running --no-legend 2>/dev/null \
+      | awk '{print $1, $2, $3, $4}' | sort >> "$out"
+    section "SYSTEMD SERVICES (failed)" "$out"
+    systemctl list-units --type=service --state=failed --no-legend 2>/dev/null \
+      | awk '{print $1, $2, $3, $4}' | sort >> "$out" || echo "None" >> "$out"
+    section "SYSTEMD ENABLED UNITS" "$out"
+    systemctl list-unit-files --state=enabled --no-legend 2>/dev/null \
+      | awk '{print $1}' | sort >> "$out"
+  else
+    service --status-all 2>/dev/null >> "$out" || echo "N/A" >> "$out"
+  fi
+}
+
+collect_network() {
+  local out="$1"
+  section "NETWORK INTERFACES" "$out"
+  ip -br addr show 2>/dev/null >> "$out" || ifconfig 2>/dev/null >> "$out" || echo "N/A" >> "$out"
+
+  section "NETWORK ROUTES" "$out"
+  ip route show 2>/dev/null >> "$out" || netstat -rn 2>/dev/null >> "$out" || echo "N/A" >> "$out"
+
+  section "LISTENING PORTS (TCP/UDP)" "$out"
+  if cmd_exists ss; then
+    ss -tlunp 2>/dev/null >> "$out"
+  elif cmd_exists netstat; then
+    netstat -tlunp 2>/dev/null >> "$out"
+  else
+    echo "N/A" >> "$out"
+  fi
+
+  section "DNS CONFIGURATION" "$out"
+  cat /etc/resolv.conf 2>/dev/null >> "$out" || echo "N/A" >> "$out"
+
+  section "HOSTS FILE" "$out"
+  cat /etc/hosts 2>/dev/null >> "$out" || echo "N/A" >> "$out"
+
+  section "FIREWALL (iptables)" "$out"
+  iptables -L -n --line-numbers 2>/dev/null >> "$out" || echo "N/A" >> "$out"
+
+  section "FIREWALL (firewalld)" "$out"
+  if cmd_exists firewall-cmd; then
+    firewall-cmd --list-all 2>/dev/null >> "$out" || echo "N/A" >> "$out"
+  else
+    echo "firewalld not installed" >> "$out"
+  fi
+
+  section "FIREWALL (ufw)" "$out"
+  if cmd_exists ufw; then
+    ufw status verbose 2>/dev/null >> "$out" || echo "N/A" >> "$out"
+  else
+    echo "ufw not installed" >> "$out"
+  fi
+}
+
+collect_disk() {
+  local out="$1"
+  section "DISK USAGE (df -hT)" "$out"
+  df -hT 2>/dev/null >> "$out" || echo "N/A" >> "$out"
+
+  section "DISK INODES (df -i)" "$out"
+  df -i 2>/dev/null >> "$out" || echo "N/A" >> "$out"
+
+  section "BLOCK DEVICES (lsblk)" "$out"
+  lsblk -o NAME,SIZE,FSTYPE,MOUNTPOINT,UUID 2>/dev/null >> "$out" || echo "N/A" >> "$out"
+
+  section "LVM – VOLUME GROUPS" "$out"
+  if cmd_exists vgdisplay; then
+    vgdisplay 2>/dev/null >> "$out" || echo "N/A" >> "$out"
+  else
+    echo "LVM not installed" >> "$out"
+  fi
+
+  section "LVM – LOGICAL VOLUMES" "$out"
+  if cmd_exists lvdisplay; then
+    lvdisplay 2>/dev/null >> "$out" || echo "N/A" >> "$out"
+  else
+    echo "LVM not installed" >> "$out"
+  fi
+
+  section "FSTAB" "$out"
+  cat /etc/fstab 2>/dev/null | grep -v '^#' | grep -v '^$' >> "$out" || echo "N/A" >> "$out"
+
+  section "MOUNT POINTS" "$out"
+  mount | sort >> "$out" || echo "N/A" >> "$out"
+}
+
+collect_memory() {
+  local out="$1"
+  section "MEMORY & SWAP" "$out"
+  free -h 2>/dev/null >> "$out" || echo "N/A" >> "$out"
+
+  echo "" >> "$out"
+  echo "--- /proc/meminfo ---" >> "$out"
+  cat /proc/meminfo 2>/dev/null >> "$out" || echo "N/A" >> "$out"
+
+  section "SWAP PARTITIONS" "$out"
+  swapon --show 2>/dev/null >> "$out" || cat /proc/swaps 2>/dev/null >> "$out" || echo "N/A" >> "$out"
+}
+
+collect_cpu() {
+  local out="$1"
+  section "CPU / HARDWARE" "$out"
+  lscpu 2>/dev/null >> "$out" || echo "N/A" >> "$out"
+
+  section "CPU LOAD AVERAGES" "$out"
+  cat /proc/loadavg >> "$out" 2>/dev/null || echo "N/A" >> "$out"
+  echo "" >> "$out"
+  top -bn1 2>/dev/null | head -10 >> "$out" || echo "N/A" >> "$out"
+}
+
+collect_security() {
+  local out="$1"
+  section "SELinux STATUS" "$out"
+  if cmd_exists getenforce; then
+    getenforce 2>/dev/null >> "$out"
+    sestatus 2>/dev/null >> "$out" || true
+  else
+    echo "SELinux not installed" >> "$out"
+  fi
+
+  section "AppArmor STATUS" "$out"
+  if cmd_exists aa-status; then
+    aa-status 2>/dev/null >> "$out" || echo "N/A" >> "$out"
+  else
+    echo "AppArmor not installed" >> "$out"
+  fi
+
+  section "SUDOERS (non-comment lines)" "$out"
+  grep -v '^#' /etc/sudoers 2>/dev/null | grep -v '^$' >> "$out" || echo "N/A" >> "$out"
+
+  section "SSHD CONFIGURATION" "$out"
+  if [ -f /etc/ssh/sshd_config ]; then
+    grep -v '^#' /etc/ssh/sshd_config 2>/dev/null | grep -v '^$' >> "$out"
+  else
+    echo "/etc/ssh/sshd_config not found" >> "$out"
+  fi
+
+  section "LOGGED-IN USERS & SESSIONS" "$out"
+  last -n 20 2>/dev/null >> "$out" || echo "N/A" >> "$out"
+
+  section "PASSWD ENTRIES (users with login shells)" "$out"
+  grep -v 'nologin\|false' /etc/passwd 2>/dev/null >> "$out" || echo "N/A" >> "$out"
+}
+
+collect_scheduled_jobs() {
+  local out="$1"
+  section "CRON JOBS (system-wide)" "$out"
+  for cronfile in /etc/crontab /etc/cron.d/* /var/spool/cron/crontabs/* /var/spool/cron/*; do
+    if [ -f "$cronfile" ]; then
+      echo "--- $cronfile ---" >> "$out"
+      cat "$cronfile" 2>/dev/null | grep -v '^#' | grep -v '^$' >> "$out"
+    fi
+  done
+
+  section "SYSTEMD TIMERS" "$out"
+  if cmd_exists systemctl; then
+    systemctl list-timers --all --no-legend 2>/dev/null >> "$out" || echo "N/A" >> "$out"
+  fi
+
+  section "AT JOBS" "$out"
+  if cmd_exists atq; then
+    atq 2>/dev/null >> "$out" || echo "No at jobs" >> "$out"
+  else
+    echo "at not installed" >> "$out"
+  fi
+}
+
+collect_kernel_params() {
+  local out="$1"
+  section "KERNEL PARAMETERS (sysctl)" "$out"
+  sysctl -a 2>/dev/null | sort >> "$out" || echo "N/A" >> "$out"
+
+  section "KERNEL CMDLINE" "$out"
+  cat /proc/cmdline 2>/dev/null >> "$out" || echo "N/A" >> "$out"
+
+  section "AVAILABLE KERNELS" "$out"
+  if [ -d /boot ]; then
+    ls -lh /boot/vmlinuz* /boot/kernel* 2>/dev/null >> "$out" || echo "N/A" >> "$out"
+  fi
+  if cmd_exists grubby; then
+    grubby --default-kernel 2>/dev/null >> "$out" || true
+  fi
+}
+
+collect_repos() {
+  local out="$1"
+  section "YUM/DNF REPOSITORIES" "$out"
+  if cmd_exists dnf; then
+    dnf repolist all 2>/dev/null >> "$out" || echo "N/A" >> "$out"
+  elif cmd_exists yum; then
+    yum repolist all 2>/dev/null >> "$out" || echo "N/A" >> "$out"
+  fi
+
+  section "APT SOURCES" "$out"
+  if [ -f /etc/apt/sources.list ]; then
+    cat /etc/apt/sources.list 2>/dev/null >> "$out"
+  fi
+  if [ -d /etc/apt/sources.list.d ]; then
+    ls -1 /etc/apt/sources.list.d/ 2>/dev/null | while read -r f; do
+      echo "--- /etc/apt/sources.list.d/$f ---" >> "$out"
+      cat "/etc/apt/sources.list.d/$f" 2>/dev/null | grep -v '^#' | grep -v '^$' >> "$out"
+    done
+  fi
+}
+
+collect_processes() {
+  local out="$1"
+  section "RUNNING PROCESSES (full)" "$out"
+  ps auxf 2>/dev/null >> "$out" || ps aux 2>/dev/null >> "$out" || echo "N/A" >> "$out"
+}
+
+collect_system_logs() {
+  local out="$1"
+  section "RECENT SYSTEM ERRORS (last 50 lines from journalctl)" "$out"
+  if cmd_exists journalctl; then
+    journalctl -p err -n 50 --no-pager 2>/dev/null >> "$out" || echo "N/A" >> "$out"
+  fi
+
+  section "DMESG ERRORS" "$out"
+  dmesg --level=err,crit,alert,emerg 2>/dev/null | tail -50 >> "$out" \
+    || dmesg 2>/dev/null | grep -iE 'error|fail|critical' | tail -50 >> "$out" \
+    || echo "N/A" >> "$out"
+}
+
+collect_rpm_checksums() {
+  # For RPM systems: track verify status of key packages
+  local out="$1"
+  section "RPM VERIFY (critical packages)" "$out"
+  if cmd_exists rpm; then
+    for pkg in bash sudo openssh-server glibc kernel; do
+      echo "--- rpm -V $pkg ---" >> "$out"
+      rpm -V "$pkg" 2>/dev/null >> "$out" || echo "  (not installed or verify failed)" >> "$out"
+    done
+  else
+    echo "rpm not available" >> "$out"
+  fi
+}
+
+collect_file_integrity_hints() {
+  local out="$1"
+  section "KEY CONFIG FILE CHECKSUMS (sha256sum)" "$out"
+  for f in /etc/passwd /etc/shadow /etc/group /etc/sudoers \
+            /etc/ssh/sshd_config /etc/hosts /etc/fstab \
+            /etc/resolv.conf /etc/nsswitch.conf; do
+    if [ -f "$f" ]; then
+      sha256sum "$f" 2>/dev/null >> "$out"
+    fi
+  done
+}
+
+collect_ntp() {
+  local out="$1"
+  section "TIME SYNCHRONIZATION" "$out"
+  if cmd_exists timedatectl; then
+    timedatectl status 2>/dev/null >> "$out" || echo "N/A" >> "$out"
+  fi
+  if cmd_exists chronyc; then
+    echo "--- chronyc tracking ---" >> "$out"
+    chronyc tracking 2>/dev/null >> "$out" || echo "N/A" >> "$out"
+    echo "--- chronyc sources ---" >> "$out"
+    chronyc sources -v 2>/dev/null >> "$out" || echo "N/A" >> "$out"
+  elif cmd_exists ntpq; then
+    ntpq -p 2>/dev/null >> "$out" || echo "N/A" >> "$out"
+  fi
+}
+
+collect_ha_cluster() {
+  local out="$1"
+  section "HA / CLUSTER STATUS" "$out"
+  if cmd_exists pcs; then
+    pcs status 2>/dev/null >> "$out" || echo "N/A" >> "$out"
+  elif cmd_exists crm; then
+    crm status 2>/dev/null >> "$out" || echo "N/A" >> "$out"
+  else
+    echo "No HA cluster tools found (pcs/crm)" >> "$out"
+  fi
+}
+
+collect_docker() {
+  local out="$1"
+  section "DOCKER / CONTAINER STATUS" "$out"
+  if cmd_exists docker; then
+    echo "--- docker version ---" >> "$out"
+    docker version 2>/dev/null >> "$out" || echo "N/A" >> "$out"
+    echo "--- docker ps (running) ---" >> "$out"
+    docker ps 2>/dev/null >> "$out" || echo "N/A" >> "$out"
+    echo "--- docker images ---" >> "$out"
+    docker images 2>/dev/null >> "$out" || echo "N/A" >> "$out"
+  else
+    echo "Docker not installed" >> "$out"
+  fi
+  if cmd_exists podman; then
+    echo "--- podman ps ---" >> "$out"
+    podman ps 2>/dev/null >> "$out" || echo "N/A" >> "$out"
+  fi
+}
+
+# ── Master collect ────────────────────────────────────────────────────────────
+run_checks() {
+  local out="$1"
+  local mode_label="$2"
+
+  log "Starting $mode_label checks → ${out}"
+
+  {
+    echo "=========================================="
+    echo " PATCH CHECK REPORT — $mode_label"
+    echo " Host      : ${HOSTNAME}"
+    echo " Generated : $(date)"
+    echo " Kernel    : $(uname -r)"
+    echo "=========================================="
+  } > "$out"
+
+  local steps=(
+    "System Info"        collect_system_info
+    "Installed Packages" collect_packages
+    "Kernel Modules"     collect_kernel_modules
+    "Services"           collect_services
+    "Network"            collect_network
+    "Disk"               collect_disk
+    "Memory"             collect_memory
+    "CPU"                collect_cpu
+    "Security"           collect_security
+    "Scheduled Jobs"     collect_scheduled_jobs
+    "Kernel Parameters"  collect_kernel_params
+    "Repositories"       collect_repos
+    "Processes"          collect_processes
+    "System Logs"        collect_system_logs
+    "RPM Verify"         collect_rpm_checksums
+    "File Integrity"     collect_file_integrity_hints
+    "NTP/Time"           collect_ntp
+    "HA Cluster"         collect_ha_cluster
+    "Containers"         collect_docker
+  )
+
+  local total=$(( ${#steps[@]} / 2 ))
+  local i=0
+  while [ $i -lt ${#steps[@]} ]; do
+    local label="${steps[$i]}"
+    local func="${steps[$((i+1))]}"
+    log "  [$((i/2+1))/${total}] Collecting: ${label}"
+    # Call the function; pass $out and a secondary arg if needed
+    if [ "$func" = "collect_packages" ]; then
+      collect_packages "$out" ""
+    else
+      $func "$out"
+    fi
+    i=$((i+2))
+  done
+
+  # Save individual section files for diffing
+  local snap_dir
+  if [ "$mode_label" = "PRE" ]; then snap_dir="$PRE_DIR"; else snap_dir="$POST_DIR"; fi
+  cp "$out" "${snap_dir}/full_report.txt"
+  success "$mode_label checks complete → $out"
+}
+
+# ── Compare ───────────────────────────────────────────────────────────────────
+run_compare() {
+  if [ ! -f "$PRE_REPORT" ]; then
+    error "Pre-patch report not found: $PRE_REPORT"
+    error "Run:  sudo $0 pre   before patching."
+    exit 1
+  fi
+  if [ ! -f "$POST_REPORT" ]; then
+    error "Post-patch report not found: $POST_REPORT"
+    error "Run:  sudo $0 post  after patching."
+    exit 1
+  fi
+
+  log "Generating comparison report → ${COMPARE_REPORT}"
+
+  {
+    echo "=========================================================="
+    echo " PATCH COMPARISON REPORT"
+    echo " Host      : ${HOSTNAME}"
+    echo " Generated : $(date)"
+    echo " PRE  file : ${PRE_REPORT}"
+    echo " POST file : ${POST_REPORT}"
+    echo "=========================================================="
+  } > "$COMPARE_REPORT"
+
+  # ── Kernel version ──
+  {
+    echo ""
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo " KERNEL VERSION"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    PRE_KERN=$(grep '^Kernel' "$PRE_REPORT" | head -1 | awk '{print $NF}')
+    POST_KERN=$(grep '^Kernel' "$POST_REPORT" | head -1 | awk '{print $NF}')
+    echo "  PRE  : ${PRE_KERN:-$(grep 'uname -r\|Kernel' "$PRE_REPORT" | head -1)}"
+    echo "  POST : ${POST_KERN:-$(grep 'uname -r\|Kernel' "$POST_REPORT" | head -1)}"
+    [ "$PRE_KERN" != "$POST_KERN" ] && echo "  *** KERNEL CHANGED ***" || echo "  (no change)"
+  } >> "$COMPARE_REPORT"
+
+  # ── Helper: extract a section block from a report ──
+  extract_section() {
+    local file="$1" label="$2"
+    awk "/^# ${label}/{found=1; next} found && /^########################################/{exit} found{print}" "$file" 2>/dev/null
+  }
+
+  # ── Package diff ──
+  {
+    echo ""
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo " PACKAGE CHANGES"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+  } >> "$COMPARE_REPORT"
+
+  # Extract package lines
+  if grep -q '^ii' "$PRE_REPORT" 2>/dev/null; then
+    # Debian/Ubuntu style
+    grep '^ii' "$PRE_REPORT"  | awk '{print $2"\t"$3}' | sort > /tmp/_pre_pkgs.txt
+    grep '^ii' "$POST_REPORT" | awk '{print $2"\t"$3}' | sort > /tmp/_post_pkgs.txt
+  else
+    # RPM style – lines are bare package strings in the INSTALLED PACKAGES section
+    awk '/^# INSTALLED PACKAGES/{found=1; next} found && /^########################################/{exit} found{print}' \
+      "$PRE_REPORT"  | grep -v '^$' | sort > /tmp/_pre_pkgs.txt
+    awk '/^# INSTALLED PACKAGES/{found=1; next} found && /^########################################/{exit} found{print}' \
+      "$POST_REPORT" | grep -v '^$' | sort > /tmp/_post_pkgs.txt
+  fi
+
+  {
+    echo ""
+    echo "--- NEWLY INSTALLED PACKAGES ---"
+    comm -13 /tmp/_pre_pkgs.txt /tmp/_post_pkgs.txt | head -200 || echo "  None"
+    echo ""
+    echo "--- REMOVED PACKAGES ---"
+    comm -23 /tmp/_pre_pkgs.txt /tmp/_post_pkgs.txt | head -200 || echo "  None"
+    # Updated = same name, different version (RPM only)
+    echo ""
+    echo "--- UPDATED PACKAGES (name changed version) ---"
+    if grep -q '^ii' "$PRE_REPORT" 2>/dev/null; then
+      join <(sort /tmp/_pre_pkgs.txt) <(sort /tmp/_post_pkgs.txt) \
+        | awk '{if ($2 != $3) print "  " $1 "  " $2 " -> " $3}' | head -200 || echo "  (use dpkg --get-selections diff for full list)"
+    else
+      # RPM: strip epoch/version, compare
+      comm -12 \
+        <(awk '{sub(/\.[^.]+$/, "", $0); sub(/-[0-9].*$/, "", $0); print}' /tmp/_pre_pkgs.txt | sort -u) \
+        <(awk '{sub(/\.[^.]+$/, "", $0); sub(/-[0-9].*$/, "", $0); print}' /tmp/_post_pkgs.txt | sort -u) \
+        > /tmp/_common_names.txt
+      echo "  (Packages present in both PRE and POST — inspect version changes in full diff)"
+      head -20 /tmp/_common_names.txt | sed 's/^/  /'
+    fi
+    rm -f /tmp/_pre_pkgs.txt /tmp/_post_pkgs.txt /tmp/_common_names.txt
+  } >> "$COMPARE_REPORT"
+
+  # ── Service diff ──
+  {
+    echo ""
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo " SERVICE CHANGES"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+  } >> "$COMPARE_REPORT"
+
+  awk '/^# SYSTEMD SERVICES .running./{found=1; next} found && /^########################################/{exit} found{print}' \
+    "$PRE_REPORT"  | awk '{print $1}' | sort > /tmp/_pre_svc.txt
+  awk '/^# SYSTEMD SERVICES .running./{found=1; next} found && /^########################################/{exit} found{print}' \
+    "$POST_REPORT" | awk '{print $1}' | sort > /tmp/_post_svc.txt
+
+  {
+    echo ""
+    echo "--- SERVICES STARTED (new in POST) ---"
+    comm -13 /tmp/_pre_svc.txt /tmp/_post_svc.txt || echo "  None"
+    echo ""
+    echo "--- SERVICES STOPPED (missing from POST) ---"
+    comm -23 /tmp/_pre_svc.txt /tmp/_post_svc.txt || echo "  None"
+    rm -f /tmp/_pre_svc.txt /tmp/_post_svc.txt
+  } >> "$COMPARE_REPORT"
+
+  # ── Listening port diff ──
+  {
+    echo ""
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo " LISTENING PORT CHANGES"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+  } >> "$COMPARE_REPORT"
+
+  awk '/^# LISTENING PORTS/{found=1; next} found && /^########################################/{exit} found && /LISTEN/{print $5}' \
+    "$PRE_REPORT"  | sort -u > /tmp/_pre_ports.txt
+  awk '/^# LISTENING PORTS/{found=1; next} found && /^########################################/{exit} found && /LISTEN/{print $5}' \
+    "$POST_REPORT" | sort -u > /tmp/_post_ports.txt
+
+  {
+    echo ""
+    echo "--- NEW LISTENING PORTS ---"
+    comm -13 /tmp/_pre_ports.txt /tmp/_post_ports.txt || echo "  None"
+    echo ""
+    echo "--- CLOSED PORTS (no longer listening) ---"
+    comm -23 /tmp/_pre_ports.txt /tmp/_post_ports.txt || echo "  None"
+    rm -f /tmp/_pre_ports.txt /tmp/_post_ports.txt
+  } >> "$COMPARE_REPORT"
+
+  # ── Disk usage diff ──
+  {
+    echo ""
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo " DISK USAGE CHANGES"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+  } >> "$COMPARE_REPORT"
+
+  awk '/^# DISK USAGE/{found=1; next} found && /^########################################/{exit} found{print}' \
+    "$PRE_REPORT"  | grep -v '^$' > /tmp/_pre_disk.txt
+  awk '/^# DISK USAGE/{found=1; next} found && /^########################################/{exit} found{print}' \
+    "$POST_REPORT" | grep -v '^$' > /tmp/_post_disk.txt
+
+  {
+    echo ""
+    diff /tmp/_pre_disk.txt /tmp/_post_disk.txt | grep -E '^[<>]' \
+      | sed 's/^< /PRE : /' | sed 's/^> /POST: /' || echo "  No changes"
+    rm -f /tmp/_pre_disk.txt /tmp/_post_disk.txt
+  } >> "$COMPARE_REPORT"
+
+  # ── Kernel module diff ──
+  {
+    echo ""
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo " KERNEL MODULE CHANGES"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+  } >> "$COMPARE_REPORT"
+
+  awk '/^# LOADED KERNEL MODULES/{found=1; next} found && /^########################################/{exit} found{print $1}' \
+    "$PRE_REPORT"  | sort > /tmp/_pre_mod.txt
+  awk '/^# LOADED KERNEL MODULES/{found=1; next} found && /^########################################/{exit} found{print $1}' \
+    "$POST_REPORT" | sort > /tmp/_post_mod.txt
+
+  {
+    echo ""
+    echo "--- NEW MODULES LOADED ---"
+    comm -13 /tmp/_pre_mod.txt /tmp/_post_mod.txt || echo "  None"
+    echo ""
+    echo "--- MODULES UNLOADED ---"
+    comm -23 /tmp/_pre_mod.txt /tmp/_post_mod.txt || echo "  None"
+    rm -f /tmp/_pre_mod.txt /tmp/_post_mod.txt
+  } >> "$COMPARE_REPORT"
+
+  # ── File integrity diff ──
+  {
+    echo ""
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo " KEY CONFIG FILE INTEGRITY CHANGES"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+  } >> "$COMPARE_REPORT"
+
+  awk '/^# KEY CONFIG FILE CHECKSUMS/{found=1; next} found && /^########################################/{exit} found{print}' \
+    "$PRE_REPORT"  | sort > /tmp/_pre_sha.txt
+  awk '/^# KEY CONFIG FILE CHECKSUMS/{found=1; next} found && /^########################################/{exit} found{print}' \
+    "$POST_REPORT" | sort > /tmp/_post_sha.txt
+
+  {
+    echo ""
+    diff /tmp/_pre_sha.txt /tmp/_post_sha.txt \
+      | grep -E '^[<>]' \
+      | sed 's/^< /PRE : /' | sed 's/^> /POST: /' || echo "  No changes (all checksums match)"
+    rm -f /tmp/_pre_sha.txt /tmp/_post_sha.txt
+  } >> "$COMPARE_REPORT"
+
+  # ── Full raw diff (trimmed) ──
+  {
+    echo ""
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo " FULL DIFF (PRE → POST)"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo ""
+  } >> "$COMPARE_REPORT"
+  diff "$PRE_REPORT" "$POST_REPORT" >> "$COMPARE_REPORT" 2>/dev/null || true
+
+  success "Comparison report saved → ${COMPARE_REPORT}"
+  echo ""
+  echo -e "${BOLD}Summary of key findings:${RESET}"
+  grep -E '^\*\*\*|CHANGED|NEW LISTENING|CLOSED PORTS|NEWLY INSTALLED|REMOVED|STARTED|STOPPED|MODULES' \
+    "$COMPARE_REPORT" | head -40 || true
+}
+
+# ── Usage ─────────────────────────────────────────────────────────────────────
+usage() {
+  echo ""
+  echo -e "${BOLD}Usage:${RESET}  sudo $0 {pre|post|compare}"
+  echo ""
+  echo "  pre      – Collect pre-patch snapshot"
+  echo "  post     – Collect post-patch snapshot"
+  echo "  compare  – Generate comparison report (requires both pre & post)"
+  echo ""
+  echo "Reports are saved under: ${REPORT_DIR}/"
+  echo ""
+}
+
+# ── Main ──────────────────────────────────────────────────────────────────────
+check_root
+ensure_dirs
+
+case "$MODE" in
+  pre)
+    header "PRE-PATCH CHECKS  —  ${HOSTNAME}"
+    run_checks "$PRE_REPORT" "PRE"
+    echo ""
+    log "Pre-patch report : ${PRE_REPORT}"
+    log "Now apply your patches, then run:  sudo $0 post"
+    ;;
+  post)
+    header "POST-PATCH CHECKS  —  ${HOSTNAME}"
+    run_checks "$POST_REPORT" "POST"
+    echo ""
+    log "Post-patch report: ${POST_REPORT}"
+    log "To compare, run:  sudo $0 compare"
+    ;;
+  compare)
+    header "COMPARISON REPORT  —  ${HOSTNAME}"
+    run_compare
+    echo ""
+    log "Full comparison  : ${COMPARE_REPORT}"
+    ;;
+  *)
+    usage
+    exit 1
+    ;;
+esac
