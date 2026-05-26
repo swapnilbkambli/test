@@ -564,16 +564,22 @@ run_compare() {
     echo ""
     echo "--- UPDATED PACKAGES (name changed version) ---"
     if grep -q '^ii' "$PRE_REPORT" 2>/dev/null; then
-      join <(sort /tmp/_pre_pkgs.txt) <(sort /tmp/_post_pkgs.txt) \
-        | awk '{if ($2 != $3) print "  " $1 "  " $2 " -> " $3}' | head -200 || echo "  (use dpkg --get-selections diff for full list)"
+      sort /tmp/_pre_pkgs.txt  > /tmp/_pre_pkgs_sorted.txt
+      sort /tmp/_post_pkgs.txt > /tmp/_post_pkgs_sorted.txt
+      join /tmp/_pre_pkgs_sorted.txt /tmp/_post_pkgs_sorted.txt \
+        | awk '{if ($2 != $3) print "  " $1 "  " $2 " -> " $3}' | head -200 \
+        || echo "  (use dpkg --get-selections diff for full list)"
+      rm -f /tmp/_pre_pkgs_sorted.txt /tmp/_post_pkgs_sorted.txt
     else
       # RPM: strip epoch/version, compare
-      comm -12 \
-        <(awk '{sub(/\.[^.]+$/, "", $0); sub(/-[0-9].*$/, "", $0); print}' /tmp/_pre_pkgs.txt | sort -u) \
-        <(awk '{sub(/\.[^.]+$/, "", $0); sub(/-[0-9].*$/, "", $0); print}' /tmp/_post_pkgs.txt | sort -u) \
-        > /tmp/_common_names.txt
+      awk '{sub(/\.[^.]+$/, "", $0); sub(/-[0-9].*$/, "", $0); print}' \
+        /tmp/_pre_pkgs.txt  | sort -u > /tmp/_rpm_pre_names.txt
+      awk '{sub(/\.[^.]+$/, "", $0); sub(/-[0-9].*$/, "", $0); print}' \
+        /tmp/_post_pkgs.txt | sort -u > /tmp/_rpm_post_names.txt
+      comm -12 /tmp/_rpm_pre_names.txt /tmp/_rpm_post_names.txt > /tmp/_common_names.txt
       echo "  (Packages present in both PRE and POST — inspect version changes in full diff)"
       head -20 /tmp/_common_names.txt | sed 's/^/  /'
+      rm -f /tmp/_rpm_pre_names.txt /tmp/_rpm_post_names.txt
     fi
     rm -f /tmp/_pre_pkgs.txt /tmp/_post_pkgs.txt /tmp/_common_names.txt
   } >> "$COMPARE_REPORT"
