@@ -3,12 +3,25 @@
 #  patch_checks.sh  –  Comprehensive Linux Server Patching Pre/Post Checks
 # =============================================================================
 #  Usage:
-#    Pre-patch  : sudo ./patch_checks.sh pre
-#    Post-patch : sudo ./patch_checks.sh post
-#    Compare    : sudo ./patch_checks.sh compare
-#    Full cycle : sudo ./patch_checks.sh pre   (patch the server)
-#                 sudo ./patch_checks.sh post
-#                 sudo ./patch_checks.sh compare
+#    Pre-patch  : sudo bash patch_checks.sh pre
+#    Post-patch : sudo bash patch_checks.sh post
+#    Compare    : sudo bash patch_checks.sh compare
+#
+#  Full monthly cycle:
+#    1. sudo bash patch_checks.sh pre      (before patching)
+#    2. Apply your patches
+#    3. sudo bash patch_checks.sh post     (after patching)
+#    4. sudo bash patch_checks.sh compare  (generates diff report)
+#
+#  Report layout under /var/log/patch_checks/:
+#    pre/   PRE_PATCH_<host>_YYYYMMDD.txt
+#    post/  POST_PATCH_<host>_YYYYMMDD.txt
+#    diff/  COMPARISON_<host>_YYYYMMDD_HHMMSS.txt
+#    LATEST_PRE_<host>.txt        → symlink to latest pre report
+#    LATEST_POST_<host>.txt       → symlink to latest post report
+#    LATEST_COMPARISON_<host>.txt → symlink to latest comparison
+#
+#  Retention: reports older than 180 days (6 months) are auto-purged.
 # =============================================================================
 
 set -euo pipefail
@@ -16,16 +29,26 @@ set -euo pipefail
 # ── Configuration ────────────────────────────────────────────────────────────
 REPORT_DIR="/var/log/patch_checks"
 TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
+DATESTAMP=$(date +"%Y%m%d")            # e.g. 20260526 — used in filenames
 HOSTNAME=$(hostname -f 2>/dev/null || hostname)
 MODE="${1:-}"
+
+# Retention: reports older than this many days are purged (6 months = 180 days)
+RETENTION_DAYS=180
 
 PRE_DIR="${REPORT_DIR}/pre"
 POST_DIR="${REPORT_DIR}/post"
 DIFF_DIR="${REPORT_DIR}/diff"
 
-PRE_REPORT="${REPORT_DIR}/PRE_PATCH_${HOSTNAME}.txt"
-POST_REPORT="${REPORT_DIR}/POST_PATCH_${HOSTNAME}.txt"
-COMPARE_REPORT="${REPORT_DIR}/COMPARISON_${HOSTNAME}_${TIMESTAMP}.txt"
+# Dated filenames — one file per patch cycle per day
+PRE_REPORT="${PRE_DIR}/PRE_PATCH_${HOSTNAME}_${DATESTAMP}.txt"
+POST_REPORT="${POST_DIR}/POST_PATCH_${HOSTNAME}_${DATESTAMP}.txt"
+COMPARE_REPORT="${DIFF_DIR}/COMPARISON_${HOSTNAME}_${TIMESTAMP}.txt"
+
+# Symlinks always pointing to the latest report of each type
+PRE_LATEST="${REPORT_DIR}/LATEST_PRE_${HOSTNAME}.txt"
+POST_LATEST="${REPORT_DIR}/LATEST_POST_${HOSTNAME}.txt"
+COMPARE_LATEST="${REPORT_DIR}/LATEST_COMPARISON_${HOSTNAME}.txt"
 
 # Colours (disabled if not a terminal)
 if [ -t 1 ]; then
@@ -65,6 +88,46 @@ ensure_dirs() {
 }
 
 cmd_exists() { command -v "$1" &>/dev/null; }
+
+# ── Retention: delete reports older than RETENTION_DAYS ──────────────────────
+purge_old_reports() {
+  log "Purging reports older than ${RETENTION_DAYS} days (retention = 6 months)..."
+  local count=0
+  local old_file
+
+  for subdir in "$PRE_DIR" "$POST_DIR" "$DIFF_DIR"; do
+    if [ -d "$subdir" ]; then
+      find "$subdir" -maxdepth 1 -type f -name "*.txt" \
+           -mtime "+${RETENTION_DAYS}" > /tmp/_old_reports.txt 2>/dev/null || true
+      while IFS= read -r old_file; do
+        [ -z "$old_file" ] && continue
+        rm -f "$old_file"
+        count=$((count + 1))
+        log "  Removed: $old_file"
+      done < /tmp/_old_reports.txt
+      rm -f /tmp/_old_reports.txt
+    fi
+  done
+
+  if [ "$count" -eq 0 ]; then
+    success "No old reports to purge."
+  else
+    success "Purged ${count} report(s) older than ${RETENTION_DAYS} days."
+  fi
+
+  # Show current inventory
+  echo ""
+  log "Current report inventory (kept within ${RETENTION_DAYS}-day window):"
+  printf "  %-6s  %s\n" "COUNT" "DIRECTORY"
+  printf "  %-6s  %s\n" "-----" "---------"
+  for subdir in "$PRE_DIR" "$POST_DIR" "$DIFF_DIR"; do
+    local cnt
+    cnt=$(find "$subdir" -maxdepth 1 -type f -name "*.txt" 2>/dev/null | wc -l | tr -d ' ')
+    printf "  %-6s  %s\n" "$cnt" "$subdir"
+  done
+  echo ""
+}
+
 
 safe_run() {   # safe_run "description" command [args...]
   local desc="$1"; shift
@@ -481,11 +544,17 @@ run_checks() {
     i=$((i+2))
   done
 
-  # Save individual section files for diffing
-  local snap_dir
-  if [ "$mode_label" = "PRE" ]; then snap_dir="$PRE_DIR"; else snap_dir="$POST_DIR"; fi
-  cp "$out" "${snap_dir}/full_report.txt"
+  # Update the LATEST symlink so consumers always have a stable path
+  local latest_link
+  if [ "$mode_label" = "PRE" ]; then
+    latest_link="$PRE_LATEST"
+  else
+    latest_link="$POST_LATEST"
+  fi
+  ln -sf "$out" "$latest_link"
+
   success "$mode_label checks complete → $out"
+  log  "Symlink updated  → $latest_link"
 }
 
 # ── Compare ───────────────────────────────────────────────────────────────────
@@ -704,7 +773,9 @@ run_compare() {
   } >> "$COMPARE_REPORT"
   diff "$PRE_REPORT" "$POST_REPORT" >> "$COMPARE_REPORT" 2>/dev/null || true
 
+  ln -sf "$COMPARE_REPORT" "$COMPARE_LATEST"
   success "Comparison report saved → ${COMPARE_REPORT}"
+  log    "Symlink updated  → ${COMPARE_LATEST}"
   echo ""
   echo -e "${BOLD}Summary of key findings:${RESET}"
   grep -E '^\*\*\*|CHANGED|NEW LISTENING|CLOSED PORTS|NEWLY INSTALLED|REMOVED|STARTED|STOPPED|MODULES' \
@@ -714,19 +785,22 @@ run_compare() {
 # ── Usage ─────────────────────────────────────────────────────────────────────
 usage() {
   echo ""
-  echo -e "${BOLD}Usage:${RESET}  sudo $0 {pre|post|compare}"
+  echo -e "${BOLD}Usage:${RESET}  sudo bash $0 {pre|post|compare}"
   echo ""
-  echo "  pre      – Collect pre-patch snapshot"
-  echo "  post     – Collect post-patch snapshot"
-  echo "  compare  – Generate comparison report (requires both pre & post)"
+  echo "  pre      – Collect pre-patch snapshot  → pre/PRE_PATCH_<host>_YYYYMMDD.txt"
+  echo "  post     – Collect post-patch snapshot → post/POST_PATCH_<host>_YYYYMMDD.txt"
+  echo "  compare  – Generate diff report        → diff/COMPARISON_<host>_YYYYMMDD_HHMMSS.txt"
   echo ""
-  echo "Reports are saved under: ${REPORT_DIR}/"
+  echo "Reports are saved under : ${REPORT_DIR}/"
+  echo "Retention policy        : ${RETENTION_DAYS} days (6 months), auto-purged on each run"
+  echo "Latest symlinks         : ${REPORT_DIR}/LATEST_*.txt"
   echo ""
 }
 
 # ── Main ──────────────────────────────────────────────────────────────────────
 check_root
 ensure_dirs
+purge_old_reports   # always run retention cleanup first
 
 case "$MODE" in
   pre)
@@ -734,20 +808,23 @@ case "$MODE" in
     run_checks "$PRE_REPORT" "PRE"
     echo ""
     log "Pre-patch report : ${PRE_REPORT}"
-    log "Now apply your patches, then run:  sudo $0 post"
+    log "Stable symlink   : ${PRE_LATEST}"
+    log "Now apply your patches, then run:  sudo bash $0 post"
     ;;
   post)
     header "POST-PATCH CHECKS  —  ${HOSTNAME}"
     run_checks "$POST_REPORT" "POST"
     echo ""
     log "Post-patch report: ${POST_REPORT}"
-    log "To compare, run:  sudo $0 compare"
+    log "Stable symlink   : ${POST_LATEST}"
+    log "To compare, run:  sudo bash $0 compare"
     ;;
   compare)
     header "COMPARISON REPORT  —  ${HOSTNAME}"
     run_compare
     echo ""
     log "Full comparison  : ${COMPARE_REPORT}"
+    log "Stable symlink   : ${COMPARE_LATEST}"
     ;;
   *)
     usage
