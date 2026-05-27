@@ -322,8 +322,13 @@ collect_patch_level() {
   local scbrel_value
   scbrel_value=$(rpm -qa 2>/dev/null | grep SCBrel || echo "(SCBrel package not found)")
 
-  # Write to report file
+  # Write to the main report file
   echo "$scbrel_value" >> "$out"
+
+  # Also write to a dedicated one-line sidecar file so compare can read it
+  # directly without awk-parsing the big report — eliminates extraction errors.
+  # Sidecar lives alongside the report: same path, .scbrel extension.
+  echo "$scbrel_value" > "${out%.txt}.scbrel"
 
   # Also print on screen with a prominent box
   echo ""
@@ -939,16 +944,29 @@ run_compare() {
 
   # ── SCBrel patch level — FIRST section, screen + log ──
   local PRE_SCBREL POST_SCBREL
-  # section() writes: ####  /  # TITLE  /  # date  /  ####  /  <value>  /  <next section ####>
-  # We skip the first #### boundary (closing header), then grab the first non-comment non-empty line.
-  PRE_SCBREL=$(awk '/^# PATCH LEVEL \(SCBrel\)/{found=1;hdr=0;next}
-    found && /^########################################/{hdr++;if(hdr>=2)exit;next}
-    found && hdr==1 && /^[^#]/ && NF{print;exit}' \
-    "$PRE_REPORT" 2>/dev/null)
-  POST_SCBREL=$(awk '/^# PATCH LEVEL \(SCBrel\)/{found=1;hdr=0;next}
-    found && /^########################################/{hdr++;if(hdr>=2)exit;next}
-    found && hdr==1 && /^[^#]/ && NF{print;exit}' \
-    "$POST_REPORT" 2>/dev/null)
+  # Read directly from the dedicated sidecar files written by collect_patch_level.
+  # This avoids any parsing of the full report and is guaranteed to contain only
+  # the exact SCBrel package string — nothing else.
+  local PRE_SCBREL_FILE POST_SCBREL_FILE
+  PRE_SCBREL_FILE="${PRE_REPORT%.txt}.scbrel"
+  POST_SCBREL_FILE="${POST_REPORT%.txt}.scbrel"
+
+  if [ -f "$PRE_SCBREL_FILE" ]; then
+    PRE_SCBREL=$(cat "$PRE_SCBREL_FILE")
+  else
+    # Fallback: awk-parse the report for older reports without a sidecar
+    PRE_SCBREL=$(awk '/^# PATCH LEVEL/{found=1;hdr=0;next}
+      found && /^########################################/{hdr++;if(hdr>=2)exit;next}
+      found && hdr==1 && /^[^#]/ && NF{print;exit}' "$PRE_REPORT" 2>/dev/null)
+  fi
+
+  if [ -f "$POST_SCBREL_FILE" ]; then
+    POST_SCBREL=$(cat "$POST_SCBREL_FILE")
+  else
+    POST_SCBREL=$(awk '/^# PATCH LEVEL/{found=1;hdr=0;next}
+      found && /^########################################/{hdr++;if(hdr>=2)exit;next}
+      found && hdr==1 && /^[^#]/ && NF{print;exit}' "$POST_REPORT" 2>/dev/null)
+  fi
 
   PRE_SCBREL="${PRE_SCBREL:-(SCBrel package not found in PRE report)}"
   POST_SCBREL="${POST_SCBREL:-(SCBrel package not found in POST report)}"
