@@ -242,7 +242,7 @@ fi
 # ── Helpers ───────────────────────────────────────────────────────────────────
 log()     { echo -e "${CYAN}[$(date '+%H:%M:%S')]${RESET} $*"; }
 success() { echo -e "${GREEN}[✔]${RESET} $*"; }
-warn()    { echo -e "${YELLOW}[!]${RESET} $*"; }
+warn()    { echo -e "${RED}[!]${RESET} $*"; }
 error()   { echo -e "${RED}[✘]${RESET} $*" >&2; }
 header()  { echo -e "\n${BOLD}${CYAN}══════════════════════════════════════════${RESET}";
             echo -e "${BOLD}${CYAN}  $*${RESET}";
@@ -918,17 +918,77 @@ run_checks() {
 }
 
 # ── Compare ───────────────────────────────────────────────────────────────────
+
+# Resolve the best available report file for a given type (pre/post).
+# Priority: 1) today's dated file  2) latest symlink  3) newest file in dir
+# Sets the variable named by $3 to the resolved path, or "" if nothing found.
+resolve_report() {
+  local today_file="$1"   # e.g. PRE_PATCH_host_20260527.txt
+  local latest_link="$2"  # e.g. LATEST_PRE_host.txt
+  local result_var="$3"   # variable name to set
+
+  local resolved=""
+  if [ -f "$today_file" ]; then
+    resolved="$today_file"
+  elif [ -L "$latest_link" ] && [ -f "$latest_link" ]; then
+    resolved=$(readlink -f "$latest_link" 2>/dev/null || echo "")
+  else
+    # Last resort: newest .txt file in the directory
+    local dir
+    dir=$(dirname "$today_file")
+    if [ -d "$dir" ]; then
+      resolved=$(find "$dir" -maxdepth 1 -name "*.txt" -type f         2>/dev/null | sort | tail -1)
+    fi
+  fi
+
+  eval "${result_var}='${resolved}'"
+}
+
 run_compare() {
-  if [ ! -f "$PRE_REPORT" ]; then
-    error "Pre-patch report not found: $PRE_REPORT"
-    error "Run:  sudo bash $0 pre   before patching."
-    exit 1
+  local RESOLVED_PRE RESOLVED_POST
+  resolve_report "$PRE_REPORT"  "$PRE_LATEST"  "RESOLVED_PRE"
+  resolve_report "$POST_REPORT" "$POST_LATEST" "RESOLVED_POST"
+
+  # ── Validate: must have at least one of each ──
+  local abort=0
+
+  if [ -z "$RESOLVED_PRE" ]; then
+    error "No pre-patch report found for ${HOSTNAME}."
+    error "  Looked for : ${PRE_REPORT}"
+    error "  Symlink    : ${PRE_LATEST}"
+    error "  Directory  : ${PRE_DIR}"
+    error "  Fix        : sudo bash $0 pre"
+    abort=1
   fi
-  if [ ! -f "$POST_REPORT" ]; then
-    error "Post-patch report not found: $POST_REPORT"
-    error "Run:  sudo bash $0 post  after patching."
-    exit 1
+
+  if [ -z "$RESOLVED_POST" ]; then
+    error "No post-patch report found for ${HOSTNAME}."
+    error "  Looked for : ${POST_REPORT}"
+    error "  Symlink    : ${POST_LATEST}"
+    error "  Directory  : ${POST_DIR}"
+    error "  Fix        : sudo bash $0 post"
+    abort=1
   fi
+
+  [ "$abort" -eq 1 ] && exit 1
+
+  # ── Warn if using a non-today file ──
+  local pre_warn="" post_warn=""
+  [ "$RESOLVED_PRE"  != "$PRE_REPORT"  ] && pre_warn="  *** NOT today's file — using: ${RESOLVED_PRE}"
+  [ "$RESOLVED_POST" != "$POST_REPORT" ] && post_warn="  *** NOT today's file — using: ${RESOLVED_POST}"
+
+  if [ -n "$pre_warn" ] || [ -n "$post_warn" ]; then
+    warn "────────────────────────────────────────────────"
+    warn "  Compare is using reports from a DIFFERENT DATE"
+    [ -n "$pre_warn"  ] && warn "$pre_warn"
+    [ -n "$post_warn" ] && warn "$post_warn"
+    warn "────────────────────────────────────────────────"
+    echo ""
+  fi
+
+  # ── Use the resolved paths for the rest of compare ──
+  PRE_REPORT="$RESOLVED_PRE"
+  POST_REPORT="$RESOLVED_POST"
 
   log "Generating comparison report -> ${COMPARE_REPORT}"
 
@@ -939,6 +999,8 @@ run_compare() {
     echo " Generated : $(date)"
     echo " PRE  file : ${PRE_REPORT}"
     echo " POST file : ${POST_REPORT}"
+    if [ -n "$pre_warn" ];  then echo " WARNING   : PRE  report is NOT from today"; fi
+    if [ -n "$post_warn" ]; then echo " WARNING   : POST report is NOT from today"; fi
     echo "=========================================================="
   } > "$COMPARE_REPORT"
 
@@ -948,6 +1010,7 @@ run_compare() {
   # This avoids any parsing of the full report and is guaranteed to contain only
   # the exact SCBrel package string — nothing else.
   local PRE_SCBREL_FILE POST_SCBREL_FILE
+  # Sidecar files live alongside whichever report was resolved (today or older)
   PRE_SCBREL_FILE="${PRE_REPORT%.txt}.scbrel"
   POST_SCBREL_FILE="${POST_REPORT%.txt}.scbrel"
 
