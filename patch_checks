@@ -939,13 +939,29 @@ run_compare() {
 
   # ── SCBrel patch level — FIRST section, screen + log ──
   local PRE_SCBREL POST_SCBREL
-  PRE_SCBREL=$(awk '/^# PATCH LEVEL/{found=1;next} found && /^########################################/{exit} found && NF{print;exit}' \
+  # section() writes: ####  /  # TITLE  /  # date  /  ####  /  <value>  /  <next section ####>
+  # We skip the first #### boundary (closing header), then grab the first non-comment non-empty line.
+  PRE_SCBREL=$(awk '/^# PATCH LEVEL \(SCBrel\)/{found=1;hdr=0;next}
+    found && /^########################################/{hdr++;if(hdr>=2)exit;next}
+    found && hdr==1 && /^[^#]/ && NF{print;exit}' \
     "$PRE_REPORT" 2>/dev/null)
-  POST_SCBREL=$(awk '/^# PATCH LEVEL/{found=1;next} found && /^########################################/{exit} found && NF{print;exit}' \
+  POST_SCBREL=$(awk '/^# PATCH LEVEL \(SCBrel\)/{found=1;hdr=0;next}
+    found && /^########################################/{hdr++;if(hdr>=2)exit;next}
+    found && hdr==1 && /^[^#]/ && NF{print;exit}' \
     "$POST_REPORT" 2>/dev/null)
 
   PRE_SCBREL="${PRE_SCBREL:-(SCBrel package not found in PRE report)}"
   POST_SCBREL="${POST_SCBREL:-(SCBrel package not found in POST report)}"
+
+  # Determine status once — reused in both file and screen output
+  local scbrel_status scbrel_status_screen
+  if [ "$PRE_SCBREL" = "$POST_SCBREL" ]; then
+    scbrel_status="UNCHANGED -- patch level is the same before and after patching"
+    scbrel_status_screen="${YELLOW}UNCHANGED${RESET}${BOLD} -- same patch level before and after"
+  else
+    scbrel_status="UPDATED   -- patch level changed after patching"
+    scbrel_status_screen="${GREEN}UPDATED ✔${RESET}${BOLD} -- patch level changed after patching"
+  fi
 
   # Write to compare report file
   {
@@ -955,11 +971,7 @@ run_compare() {
     echo "=================================================="
     echo "  PRE  (before patching) : ${PRE_SCBREL}"
     echo "  POST (after  patching) : ${POST_SCBREL}"
-    if [ "$PRE_SCBREL" = "$POST_SCBREL" ]; then
-      echo "  STATUS : UNCHANGED -- patch level did not change"
-    else
-      echo "  STATUS : *** CHANGED *** -- patch level updated successfully"
-    fi
+    echo "  STATUS                 : ${scbrel_status}"
     echo "=================================================="
   } >> "$COMPARE_REPORT"
 
@@ -968,14 +980,10 @@ run_compare() {
   echo -e "${BOLD}┌──────────────────────────────────────────────────────────┐${RESET}"
   echo -e "${BOLD}│  PATCH LEVEL CHANGE (SCBrel)                             │${RESET}"
   echo -e "${BOLD}├──────────────────────────────────────────────────────────┤${RESET}"
-  printf "${BOLD}│  %-10s : ${CYAN}%-45s${RESET}${BOLD}│${RESET}\n" "PRE (before)" "${PRE_SCBREL}"
-  printf "${BOLD}│  %-10s : ${CYAN}%-45s${RESET}${BOLD}│${RESET}\n" "POST (after)" "${POST_SCBREL}"
+  printf "${BOLD}│  %-12s : ${CYAN}%s${RESET}\n" "PRE (before)" "${PRE_SCBREL}"
+  printf "${BOLD}│  %-12s : ${CYAN}%s${RESET}\n" "POST (after)"  "${POST_SCBREL}"
   echo -e "${BOLD}├──────────────────────────────────────────────────────────┤${RESET}"
-  if [ "$PRE_SCBREL" = "$POST_SCBREL" ]; then
-    echo -e "${BOLD}│  STATUS : ${YELLOW}UNCHANGED${RESET}${BOLD} -- patch level did not change           │${RESET}"
-  else
-    echo -e "${BOLD}│  STATUS : ${GREEN}UPDATED ✔${RESET}${BOLD} -- patch level changed successfully     │${RESET}"
-  fi
+  echo -e "${BOLD}│  STATUS : ${scbrel_status_screen}${RESET}"
   echo -e "${BOLD}└──────────────────────────────────────────────────────────┘${RESET}"
   echo ""
 
