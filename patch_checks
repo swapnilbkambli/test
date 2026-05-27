@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # =============================================================================
 #  patch_checks.sh  –  Comprehensive Linux Server Patching Pre/Post Checks
-#  Version : 2.0
+#  Version : 3.0
 #  Author  : Infrastructure / Patch Management Team
 # =============================================================================
 #
@@ -33,25 +33,71 @@
 #    Change RETENTION_DAYS in the Configuration block below to adjust.
 #
 # =============================================================================
+#  SAFETY GUARANTEE — THIS SCRIPT IS 100% READ-ONLY
+# =============================================================================
+#
+#  Every command in this script is a passive data-reader. The script:
+#
+#    ✔  ONLY reads files, queries system state, and writes to its own
+#       report files under /var/log/patch_checks/
+#
+#    ✘  NEVER invokes:  logrotate, service restart/start/stop/reload,
+#                       systemctl start/stop/restart/enable/disable,
+#                       kill / pkill / killall,
+#                       touch / chmod / chown,
+#                       apt/yum/dnf install/remove,
+#                       any command that modifies system state
+#
+#  The only files this script ever writes to are:
+#    • /var/log/patch_checks/pre/PRE_PATCH_<host>_<date>.txt
+#    • /var/log/patch_checks/post/POST_PATCH_<host>_<date>.txt
+#    • /var/log/patch_checks/diff/COMPARISON_<host>_<datetime>.txt
+#    • /var/log/patch_checks/LATEST_*.txt  (symlinks only)
+#    • /tmp/_*.txt  (short-lived diff scratch files, deleted immediately)
+#
+#  Commands used and what they do:
+#    rpm -qa | grep SCBrel — queries RPM DB read-only, no install/remove
+#    cat, grep, awk, sed, sort, find  — read and filter file content
+#    df, du, lsblk, mount             — read filesystem/disk state
+#    ip, ss, iptables -L, ufw status  — read network state (no changes)
+#    systemctl list-*                 — list only, never start/stop/enable
+#    service --status-all             — read-only status listing (SysV fallback)
+#    journalctl, dmesg                — read kernel/systemd logs
+#    rpm -qa, rpm -V                  — query package database (no install)
+#    dpkg -l                          — list packages (no install)
+#    sha256sum                        — compute checksums (reads files only)
+#    sysctl -a                        — read kernel parameters (no -w write)
+#    ps, top, lscpu, lsmod            — read process/hardware state
+#    free, uptime, who, last          — read memory/session state
+#    timedatectl, chronyc, ntpq       — read time sync status (no set)
+#    getenforce, sestatus, aa-status  — read SELinux/AppArmor state
+#    pcs status, crm status           — read cluster state (no modify)
+#    docker ps / images               — read container state (no run/stop)
+#    logrotate STATE file read via cat — logrotate binary is NEVER called
+#
+# =============================================================================
 #  WHAT THIS SCRIPT CHECKS  (PRE and POST snapshots)
 # =============================================================================
 #
 #  ┌─────────────────────────────────────────────────────────────────────────┐
 #  │  #   CATEGORY              ITEMS COLLECTED                              │
 #  ├─────────────────────────────────────────────────────────────────────────┤
-#  │  1   SYSTEM INFO           hostname, OS release, kernel version,        │
+#  │  1   PATCH LEVEL           rpm -qa | grep SCBrel  — site patch marker   │
+#  │                            printed on screen AND written to report      │
+#  ├─────────────────────────────────────────────────────────────────────────┤
+#  │  2   SYSTEM INFO           hostname, OS release, kernel version,        │
 #  │                            uptime, last boot time, current sessions      │
 #  ├─────────────────────────────────────────────────────────────────────────┤
-#  │  2   INSTALLED PACKAGES    full package list (RPM / DEB),               │
+#  │  3   INSTALLED PACKAGES    full package list (RPM / DEB),               │
 #  │                            snap packages, flatpak packages               │
 #  ├─────────────────────────────────────────────────────────────────────────┤
-#  │  3   KERNEL MODULES        all currently loaded modules (lsmod)          │
+#  │  4   KERNEL MODULES        all currently loaded modules (lsmod)          │
 #  ├─────────────────────────────────────────────────────────────────────────┤
-#  │  4   SERVICES              running systemd units,                        │
+#  │  5   SERVICES              running systemd units,                        │
 #  │                            failed systemd units,                         │
 #  │                            enabled unit files                            │
 #  ├─────────────────────────────────────────────────────────────────────────┤
-#  │  5   NETWORK               IP addresses & interfaces,                    │
+#  │  6   NETWORK               IP addresses & interfaces,                    │
 #  │                            routing table,                                │
 #  │                            listening TCP/UDP ports (ss / netstat),       │
 #  │                            DNS (/etc/resolv.conf),                       │
@@ -60,79 +106,76 @@
 #  │                            firewalld zones (if present),                 │
 #  │                            ufw status (if present)                       │
 #  ├─────────────────────────────────────────────────────────────────────────┤
-#  │  6   DISK                  df -hT (filesystem usage + type),             │
+#  │  7   DISK                  df -hT (filesystem usage + type),             │
 #  │                            df -i  (inode usage),                         │
 #  │                            lsblk  (block devices, UUIDs, mount points),  │
 #  │                            LVM volume groups & logical volumes,          │
 #  │                            /etc/fstab (active mount config),             │
 #  │                            mount   (currently mounted filesystems)       │
 #  ├─────────────────────────────────────────────────────────────────────────┤
-#  │  7   MEMORY & SWAP         free -h, /proc/meminfo,                       │
+#  │  8   MEMORY & SWAP         free -h, /proc/meminfo,                       │
 #  │                            swap partitions (swapon --show)               │
 #  ├─────────────────────────────────────────────────────────────────────────┤
-#  │  8   CPU & LOAD            lscpu (CPU topology, cores, speed),           │
+#  │  9   CPU & LOAD            lscpu (CPU topology, cores, speed),           │
 #  │                            /proc/loadavg, top snapshot                   │
 #  ├─────────────────────────────────────────────────────────────────────────┤
-#  │  9   SECURITY              SELinux mode & policy (getenforce/sestatus),  │
+#  │  10  SECURITY              SELinux mode & policy (getenforce/sestatus),  │
 #  │                            AppArmor status (aa-status),                  │
 #  │                            /etc/sudoers (non-comment lines),             │
 #  │                            /etc/ssh/sshd_config (non-comment lines),     │
 #  │                            last 20 login sessions,                       │
 #  │                            /etc/passwd users with login shells           │
 #  ├─────────────────────────────────────────────────────────────────────────┤
-#  │  10  SCHEDULED JOBS        /etc/crontab, /etc/cron.d/*,                  │
+#  │  11  SCHEDULED JOBS        /etc/crontab, /etc/cron.d/*,                  │
 #  │                            /var/spool/cron/crontabs/*,                   │
 #  │                            systemd timers (all),                         │
 #  │                            at jobs (atq)                                 │
 #  ├─────────────────────────────────────────────────────────────────────────┤
-#  │  11  KERNEL PARAMETERS     full sysctl -a output (sorted),               │
+#  │  12  KERNEL PARAMETERS     full sysctl -a output (sorted),               │
 #  │                            /proc/cmdline (boot parameters),              │
 #  │                            available kernels in /boot,                   │
 #  │                            default kernel (grubby)                       │
 #  ├─────────────────────────────────────────────────────────────────────────┤
-#  │  12  REPOSITORIES          yum / dnf repolist (all),                     │
+#  │  13  REPOSITORIES          yum / dnf repolist (all),                     │
 #  │                            /etc/apt/sources.list,                        │
 #  │                            /etc/apt/sources.list.d/*                     │
 #  ├─────────────────────────────────────────────────────────────────────────┤
-#  │  13  RUNNING PROCESSES     full ps auxf process tree                     │
+#  │  14  RUNNING PROCESSES     full ps auxf process tree                     │
 #  ├─────────────────────────────────────────────────────────────────────────┤
-#  │  14  SYSTEM LOGS           journald  : emerg/alert/crit/err, last 7d,    │
+#  │  15  SYSTEM LOGS           journald  : emerg/alert/crit/err, last 7d,    │
 #  │                            dmesg     : err/crit/alert/emerg (no ts),     │
 #  │                            syslog    : /var/log/messages or syslog,      │
 #  │                            kernel    : /var/log/kern.log,                │
 #  │                            auth      : /var/log/auth.log or secure,      │
-#  │                            audit     : /var/log/audit/audit.log          │
-#  │                              (AVC denials, failed syscalls/auth),        │
+#  │                            audit     : /var/log/audit/audit.log,         │
 #  │                            failed systemd units at snapshot time         │
 #  ├─────────────────────────────────────────────────────────────────────────┤
-#  │  15  LOG ROTATION          /etc/logrotate.conf (global config),          │
-#  │                            /etc/logrotate.d/* (per-service configs),     │
-#  │                            logrotate state file (/var/lib/logrotate/     │
-#  │                              status or /var/lib/logrotate.status),       │
-#  │                            last rotation timestamps per log file,        │
+#  │  16  LOG ROTATION          /etc/logrotate.conf (read-only),              │
+#  │                            /etc/logrotate.d/* (read-only),               │
+#  │                            logrotate state file (read-only cat),         │
 #  │                            /var/log directory sizes (du -sh),            │
-#  │                            largest log files (top 20 by size),           │
-#  │                            journald config (/etc/systemd/journald.conf   │
-#  │                              + SystemMaxUse/SystemKeepFree),             │
-#  │                            journald disk usage (journalctl --disk-usage) │
+#  │                            largest log files top 20,                     │
+#  │                            compressed archive counts,                    │
+#  │                            /etc/systemd/journald.conf (read-only),       │
+#  │                            journalctl --disk-usage                       │
 #  ├─────────────────────────────────────────────────────────────────────────┤
-#  │  16  RPM VERIFY            rpm -V on: bash, sudo, openssh-server,        │
+#  │  17  RPM VERIFY            rpm -V on: bash, sudo, openssh-server,        │
 #  │                            glibc, kernel  (detects tampered binaries)    │
 #  ├─────────────────────────────────────────────────────────────────────────┤
-#  │  17  FILE INTEGRITY        SHA-256 checksums of:                         │
+#  │  18  FILE INTEGRITY        SHA-256 checksums of:                         │
 #  │                            /etc/passwd, /etc/shadow, /etc/group,         │
 #  │                            /etc/sudoers, /etc/ssh/sshd_config,           │
 #  │                            /etc/hosts, /etc/fstab,                       │
 #  │                            /etc/resolv.conf, /etc/nsswitch.conf          │
 #  ├─────────────────────────────────────────────────────────────────────────┤
-#  │  18  TIME / NTP            timedatectl status,                           │
+#  │  19  TIME / NTP            timedatectl status,                           │
 #  │                            chronyc tracking + sources (if chrony),       │
 #  │                            ntpq -p (if ntpd)                             │
 #  ├─────────────────────────────────────────────────────────────────────────┤
-#  │  19  HA / CLUSTER          pcs status (if Pacemaker/Corosync),           │
+#  │  20  HA / CLUSTER          pcs status (if Pacemaker/Corosync),           │
 #  │                            crm status (if crm tools present)             │
 #  ├─────────────────────────────────────────────────────────────────────────┤
-#  │  20  CONTAINERS            docker version, docker ps, docker images,     │
+#  │  21  CONTAINERS            docker version, docker ps, docker images,     │
 #  │                            podman ps (if podman present)                 │
 #  └─────────────────────────────────────────────────────────────────────────┘
 #
@@ -143,20 +186,20 @@
 #  ┌─────────────────────────────────────────────────────────────────────────┐
 #  │  SECTION                   WHAT IS COMPARED                             │
 #  ├─────────────────────────────────────────────────────────────────────────┤
-#  │  Kernel version            PRE kernel vs POST kernel (flags change)     │
+#  │  Patch level (SCBrel)      PRE vs POST value shown on screen AND in     │
+#  │                            report; CHANGED / UNCHANGED status flagged   │
+#  │  Kernel version            PRE kernel vs POST kernel                    │
 #  │  Packages                  newly installed, removed, updated            │
-#  │  Services                  started (new in POST), stopped (gone from    │
-#  │                            POST), unit-file enable/disable changes      │
+#  │  Services                  started, stopped, enable/disable changes     │
 #  │  Listening ports           new ports opened, existing ports closed      │
 #  │  Disk usage                per-filesystem usage delta                   │
-#  │  Kernel modules            modules loaded after patch, modules removed  │
+#  │  Kernel modules            modules loaded / unloaded after patch        │
 #  │  File integrity            SHA-256 checksum changes on key config files │
-#  │  Log errors                NEW errors in journald, dmesg, syslog,       │
-#  │                            kern.log, auth.log, audit.log, failed units  │
-#  │                            that were NOT present before patching;       │
-#  │                            also shows errors that CLEARED after patch   │
 #  │  Log rotation              logrotate config changes, state file delta,  │
 #  │                            journald disk usage change                   │
+#  │  Log errors (new/cleared)  NEW errors in journald/dmesg/syslog/auth/   │
+#  │                            audit/kern that were not present before;     │
+#  │                            also shows errors that CLEARED after patch   │
 #  │  Full raw diff             complete line-by-line diff of PRE vs POST    │
 #  └─────────────────────────────────────────────────────────────────────────┘
 #
@@ -164,10 +207,10 @@
 
 set -euo pipefail
 
-# ── Configuration ────────────────────────────────────────────────────────────
+# ── Configuration ─────────────────────────────────────────────────────────────
 REPORT_DIR="/var/log/patch_checks"
 TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
-DATESTAMP=$(date +"%Y%m%d")            # e.g. 20260526 — used in filenames
+DATESTAMP=$(date +"%Y%m%d")
 HOSTNAME=$(hostname -f 2>/dev/null || hostname)
 MODE="${1:-}"
 
@@ -188,7 +231,7 @@ PRE_LATEST="${REPORT_DIR}/LATEST_PRE_${HOSTNAME}.txt"
 POST_LATEST="${REPORT_DIR}/LATEST_POST_${HOSTNAME}.txt"
 COMPARE_LATEST="${REPORT_DIR}/LATEST_COMPARISON_${HOSTNAME}.txt"
 
-# Colours (disabled if not a terminal)
+# ── Colours ───────────────────────────────────────────────────────────────────
 if [ -t 1 ]; then
   RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
   CYAN='\033[0;36m'; BOLD='\033[1m'; RESET='\033[0m'
@@ -196,26 +239,26 @@ else
   RED=''; GREEN=''; YELLOW=''; CYAN=''; BOLD=''; RESET=''
 fi
 
-# ── Helpers ──────────────────────────────────────────────────────────────────
+# ── Helpers ───────────────────────────────────────────────────────────────────
 log()     { echo -e "${CYAN}[$(date '+%H:%M:%S')]${RESET} $*"; }
 success() { echo -e "${GREEN}[✔]${RESET} $*"; }
 warn()    { echo -e "${YELLOW}[!]${RESET} $*"; }
 error()   { echo -e "${RED}[✘]${RESET} $*" >&2; }
-header()  { echo -e "\n${BOLD}${CYAN}══════════════════════════════════════════${RESET}"; \
-            echo -e "${BOLD}${CYAN}  $*${RESET}"; \
+header()  { echo -e "\n${BOLD}${CYAN}══════════════════════════════════════════${RESET}";
+            echo -e "${BOLD}${CYAN}  $*${RESET}";
             echo -e "${BOLD}${CYAN}══════════════════════════════════════════${RESET}"; }
 
-section() {   # section TITLE FILE
+section() {
   local title="$1" file="$2"
-  echo "" >> "$file"
+  echo ""            >> "$file"
   echo "########################################" >> "$file"
-  echo "# $title" >> "$file"
-  echo "# $(date)" >> "$file"
+  echo "# $title"   >> "$file"
+  echo "# $(date)"  >> "$file"
   echo "########################################" >> "$file"
 }
 
 check_root() {
-  if [[ $EUID -ne 0 ]]; then
+  if [ "$(id -u)" -ne 0 ]; then
     error "This script must be run as root (use sudo)."
     exit 1
   fi
@@ -225,7 +268,7 @@ ensure_dirs() {
   mkdir -p "$PRE_DIR" "$POST_DIR" "$DIFF_DIR"
 }
 
-cmd_exists() { command -v "$1" &>/dev/null; }
+cmd_exists() { command -v "$1" >/dev/null 2>&1; }
 
 # ── Retention: delete reports older than RETENTION_DAYS ──────────────────────
 purge_old_reports() {
@@ -253,7 +296,6 @@ purge_old_reports() {
     success "Purged ${count} report(s) older than ${RETENTION_DAYS} days."
   fi
 
-  # Show current inventory
   echo ""
   log "Current report inventory (kept within ${RETENTION_DAYS}-day window):"
   printf "  %-6s  %s\n" "COUNT" "DIRECTORY"
@@ -266,18 +308,31 @@ purge_old_reports() {
   echo ""
 }
 
-
-safe_run() {   # safe_run "description" command [args...]
-  local desc="$1"; shift
-  if "$@" 2>/dev/null; then
-    return 0
-  else
-    echo "  [command unavailable or failed: $desc]"
-    return 0
-  fi
-}
-
 # ── Collection Functions ──────────────────────────────────────────────────────
+
+collect_patch_level() {
+  # READ-ONLY: rpm -qa queries the RPM database — it never installs or removes.
+  # Output is written to the report file AND printed prominently on screen so
+  # the engineer can confirm patch level without opening the report.
+  local out="$1"
+  local mode_label="$2"
+
+  section "PATCH LEVEL (SCBrel)" "$out"
+
+  local scbrel_value
+  scbrel_value=$(rpm -qa 2>/dev/null | grep SCBrel || echo "(SCBrel package not found)")
+
+  # Write to report file
+  echo "$scbrel_value" >> "$out"
+
+  # Also print on screen with a prominent box
+  echo ""
+  echo -e "${BOLD}┌─────────────────────────────────────────────────────┐${RESET}"
+  echo -e "${BOLD}│  PATCH LEVEL (SCBrel) — ${mode_label}${RESET}"
+  echo -e "${BOLD}│  ${CYAN}${scbrel_value}${RESET}"
+  echo -e "${BOLD}└─────────────────────────────────────────────────────┘${RESET}"
+  echo ""
+}
 
 collect_system_info() {
   local out="$1"
@@ -297,7 +352,7 @@ collect_system_info() {
 }
 
 collect_packages() {
-  local out="$1" snap_out="$2"
+  local out="$1"
   section "INSTALLED PACKAGES" "$out"
   if cmd_exists rpm; then
     rpm -qa --queryformat '%{NAME}-%{VERSION}-%{RELEASE}.%{ARCH}\n' 2>/dev/null | sort >> "$out"
@@ -306,14 +361,14 @@ collect_packages() {
   else
     echo "No supported package manager found." >> "$out"
   fi
-  # Snap packages
+
   section "SNAP PACKAGES" "$out"
   if cmd_exists snap; then
     snap list 2>/dev/null >> "$out" || echo "N/A" >> "$out"
   else
     echo "snap not installed" >> "$out"
   fi
-  # Flatpak
+
   section "FLATPAK PACKAGES" "$out"
   if cmd_exists flatpak; then
     flatpak list 2>/dev/null >> "$out" || echo "N/A" >> "$out"
@@ -341,6 +396,7 @@ collect_services() {
     systemctl list-unit-files --state=enabled --no-legend 2>/dev/null \
       | awk '{print $1}' | sort >> "$out"
   else
+    # SysV fallback — read-only status listing
     service --status-all 2>/dev/null >> "$out" || echo "N/A" >> "$out"
   fi
 }
@@ -397,14 +453,14 @@ collect_disk() {
   section "BLOCK DEVICES (lsblk)" "$out"
   lsblk -o NAME,SIZE,FSTYPE,MOUNTPOINT,UUID 2>/dev/null >> "$out" || echo "N/A" >> "$out"
 
-  section "LVM – VOLUME GROUPS" "$out"
+  section "LVM - VOLUME GROUPS" "$out"
   if cmd_exists vgdisplay; then
     vgdisplay 2>/dev/null >> "$out" || echo "N/A" >> "$out"
   else
     echo "LVM not installed" >> "$out"
   fi
 
-  section "LVM – LOGICAL VOLUMES" "$out"
+  section "LVM - LOGICAL VOLUMES" "$out"
   if cmd_exists lvdisplay; then
     lvdisplay 2>/dev/null >> "$out" || echo "N/A" >> "$out"
   else
@@ -412,7 +468,7 @@ collect_disk() {
   fi
 
   section "FSTAB" "$out"
-  cat /etc/fstab 2>/dev/null | grep -v '^#' | grep -v '^$' >> "$out" || echo "N/A" >> "$out"
+  grep -v '^#' /etc/fstab 2>/dev/null | grep -v '^$' >> "$out" || echo "N/A" >> "$out"
 
   section "MOUNT POINTS" "$out"
   mount | sort >> "$out" || echo "N/A" >> "$out"
@@ -420,9 +476,8 @@ collect_disk() {
 
 collect_memory() {
   local out="$1"
-  section "MEMORY & SWAP" "$out"
+  section "MEMORY AND SWAP" "$out"
   free -h 2>/dev/null >> "$out" || echo "N/A" >> "$out"
-
   echo "" >> "$out"
   echo "--- /proc/meminfo ---" >> "$out"
   cat /proc/meminfo 2>/dev/null >> "$out" || echo "N/A" >> "$out"
@@ -469,7 +524,7 @@ collect_security() {
     echo "/etc/ssh/sshd_config not found" >> "$out"
   fi
 
-  section "LOGGED-IN USERS & SESSIONS" "$out"
+  section "LOGGED-IN USERS AND SESSIONS" "$out"
   last -n 20 2>/dev/null >> "$out" || echo "N/A" >> "$out"
 
   section "PASSWD ENTRIES (users with login shells)" "$out"
@@ -482,7 +537,7 @@ collect_scheduled_jobs() {
   for cronfile in /etc/crontab /etc/cron.d/* /var/spool/cron/crontabs/* /var/spool/cron/*; do
     if [ -f "$cronfile" ]; then
       echo "--- $cronfile ---" >> "$out"
-      cat "$cronfile" 2>/dev/null | grep -v '^#' | grep -v '^$' >> "$out"
+      grep -v '^#' "$cronfile" 2>/dev/null | grep -v '^$' >> "$out"
     fi
   done
 
@@ -532,7 +587,7 @@ collect_repos() {
   if [ -d /etc/apt/sources.list.d ]; then
     ls -1 /etc/apt/sources.list.d/ 2>/dev/null | while read -r f; do
       echo "--- /etc/apt/sources.list.d/$f ---" >> "$out"
-      cat "/etc/apt/sources.list.d/$f" 2>/dev/null | grep -v '^#' | grep -v '^$' >> "$out"
+      grep -v '^#' "/etc/apt/sources.list.d/$f" 2>/dev/null | grep -v '^$' >> "$out"
     done
   fi
 }
@@ -546,68 +601,177 @@ collect_processes() {
 collect_system_logs() {
   local out="$1"
 
-  # ── journald: errors and above (priority 0-3) ─────────────────────────────
   section "JOURNALD ERRORS (priority: emerg/alert/crit/err)" "$out"
   if cmd_exists journalctl; then
-    # Normalised format: YYYY-MM-DD HH:MM:SS UNIT MESSAGE  (diffable across runs)
-    journalctl -p err --no-pager       -o short-iso --since "7 days ago" 2>/dev/null       | grep -v '^-- '       | sort >> "$out"       || echo "N/A" >> "$out"
+    journalctl -p err --no-pager \
+      -o short-iso --since "7 days ago" 2>/dev/null \
+      | grep -v '^-- ' \
+      | sort >> "$out" \
+      || echo "N/A" >> "$out"
   else
     echo "journalctl not available" >> "$out"
   fi
 
-  # ── dmesg errors ──────────────────────────────────────────────────────────
   section "DMESG ERRORS (err/crit/alert/emerg)" "$out"
-  dmesg --level=err,crit,alert,emerg --notime 2>/dev/null     | sort -u >> "$out"     || dmesg 2>/dev/null       | grep -iE 'error|fail|critical|warn|oom|panic|oops'       | sed 's/^\[[ 0-9.]*\]//'       | sort -u >> "$out"     || echo "N/A" >> "$out"
+  dmesg --level=err,crit,alert,emerg --notime 2>/dev/null \
+    | sort -u >> "$out" \
+    || dmesg 2>/dev/null \
+      | grep -iE 'error|fail|critical|warn|oom|panic|oops' \
+      | sed 's/^\[[ 0-9.]*\]//' \
+      | sort -u >> "$out" \
+    || echo "N/A" >> "$out"
 
-  # ── /var/log/messages or syslog ───────────────────────────────────────────
   section "SYSLOG ERRORS (/var/log/messages or syslog)" "$out"
   local syslog_file=""
   for f in /var/log/messages /var/log/syslog; do
     [ -r "$f" ] && syslog_file="$f" && break
   done
   if [ -n "$syslog_file" ]; then
-    grep -iE ' (error|fail|critical|panic|oom killer|segfault|call trace)'       "$syslog_file" 2>/dev/null       | tail -200       | awk '{$1=$2=$3=""; print $0}'       | sort -u >> "$out"       || echo "No matching entries" >> "$out"
+    grep -iE ' (error|fail|critical|panic|oom killer|segfault|call trace)' \
+      "$syslog_file" 2>/dev/null \
+      | tail -200 \
+      | awk '{$1=$2=$3=""; print $0}' \
+      | sort -u >> "$out" \
+      || echo "No matching entries" >> "$out"
   else
     echo "No syslog file found (journald-only system)" >> "$out"
   fi
 
-  # ── /var/log/kern.log ─────────────────────────────────────────────────────
   section "KERNEL LOG ERRORS (/var/log/kern.log)" "$out"
   if [ -r /var/log/kern.log ]; then
-    grep -iE 'error|fail|panic|oops|oom|segfault' /var/log/kern.log 2>/dev/null       | tail -100       | awk '{$1=$2=$3=""; print $0}'       | sort -u >> "$out"       || echo "No matching entries" >> "$out"
+    grep -iE 'error|fail|panic|oops|oom|segfault' /var/log/kern.log 2>/dev/null \
+      | tail -100 \
+      | awk '{$1=$2=$3=""; print $0}' \
+      | sort -u >> "$out" \
+      || echo "No matching entries" >> "$out"
   else
     echo "/var/log/kern.log not found" >> "$out"
   fi
 
-  # ── /var/log/auth.log or secure ───────────────────────────────────────────
   section "AUTH ERRORS (/var/log/auth.log or secure)" "$out"
   local auth_file=""
   for f in /var/log/auth.log /var/log/secure; do
     [ -r "$f" ] && auth_file="$f" && break
   done
   if [ -n "$auth_file" ]; then
-    grep -iE 'fail|error|invalid|denied|refused|authentication failure'       "$auth_file" 2>/dev/null       | tail -100       | awk '{$1=$2=$3=""; print $0}'       | sort -u >> "$out"       || echo "No matching entries" >> "$out"
+    grep -iE 'fail|error|invalid|denied|refused|authentication failure' \
+      "$auth_file" 2>/dev/null \
+      | tail -100 \
+      | awk '{$1=$2=$3=""; print $0}' \
+      | sort -u >> "$out" \
+      || echo "No matching entries" >> "$out"
   else
     echo "No auth log found" >> "$out"
   fi
 
-  # ── audit.log ─────────────────────────────────────────────────────────────
   section "AUDIT LOG ERRORS (/var/log/audit/audit.log)" "$out"
   if [ -r /var/log/audit/audit.log ]; then
-    grep -E 'type=AVC|type=SYSCALL.*res=failed|type=USER_AUTH.*res=failed'       /var/log/audit/audit.log 2>/dev/null       | tail -100 >> "$out"       || echo "No matching entries" >> "$out"
+    grep -E 'type=AVC|type=SYSCALL.*res=failed|type=USER_AUTH.*res=failed' \
+      /var/log/audit/audit.log 2>/dev/null \
+      | tail -100 >> "$out" \
+      || echo "No matching entries" >> "$out"
   else
     echo "/var/log/audit/audit.log not found or not readable" >> "$out"
   fi
 
-  # ── Failed systemd units ───────────────────────────────────────────────────
   section "FAILED SYSTEMD UNITS (journald)" "$out"
   if cmd_exists systemctl; then
-    systemctl list-units --state=failed --no-legend 2>/dev/null       | awk '{print $1, $4, $5}' | sort >> "$out"       || echo "None" >> "$out"
+    systemctl list-units --state=failed --no-legend 2>/dev/null \
+      | awk '{print $1, $4, $5}' | sort >> "$out" \
+      || echo "None" >> "$out"
+  fi
+}
+
+collect_log_rotation() {
+  # READ-ONLY: this function only reads config/state files and queries disk usage.
+  # The logrotate binary is NEVER invoked — we only read the config files and
+  # the state file that logrotate itself maintains via cron/systemd.
+  local out="$1"
+
+  section "LOGROTATE GLOBAL CONFIG (/etc/logrotate.conf)" "$out"
+  if [ -f /etc/logrotate.conf ]; then
+    grep -v '^#' /etc/logrotate.conf 2>/dev/null | grep -v '^$' >> "$out"
+  else
+    echo "/etc/logrotate.conf not found" >> "$out"
+  fi
+
+  section "LOGROTATE DROP-IN CONFIGS (/etc/logrotate.d/)" "$out"
+  if [ -d /etc/logrotate.d ]; then
+    for f in /etc/logrotate.d/*; do
+      [ -f "$f" ] || continue
+      echo "--- $f ---" >> "$out"
+      grep -v '^#' "$f" 2>/dev/null | grep -v '^$' >> "$out"
+      echo "" >> "$out"
+    done
+  else
+    echo "/etc/logrotate.d not found" >> "$out"
+  fi
+
+  # Read-only cat of the state file logrotate maintains — we never run logrotate
+  section "LOGROTATE STATE FILE (last rotation timestamps)" "$out"
+  local state_file=""
+  for f in /var/lib/logrotate/status /var/lib/logrotate.status; do
+    [ -f "$f" ] && state_file="$f" && break
+  done
+  if [ -n "$state_file" ]; then
+    echo "State file: $state_file" >> "$out"
+    echo "" >> "$out"
+    cat "$state_file" 2>/dev/null >> "$out"
+  else
+    echo "logrotate state file not found" >> "$out"
+  fi
+
+  section "LOG DIRECTORY SIZES (/var/log)" "$out"
+  du -sh /var/log/* 2>/dev/null | sort -rh | head -30 >> "$out" || echo "N/A" >> "$out"
+  echo "" >> "$out"
+  echo "Total /var/log usage:" >> "$out"
+  du -sh /var/log 2>/dev/null >> "$out" || echo "N/A" >> "$out"
+
+  section "LARGEST LOG FILES (top 20)" "$out"
+  find /var/log -type f 2>/dev/null \
+    | xargs ls -lh 2>/dev/null \
+    | sort -rh -k5 \
+    | awk '{print $5, $9}' \
+    | head -20 >> "$out" \
+    || echo "N/A" >> "$out"
+
+  section "ROTATED LOG ARCHIVE COUNT (/var/log)" "$out"
+  {
+    echo "  .gz  files : $(find /var/log -type f -name '*.gz'  2>/dev/null | wc -l)"
+    echo "  .bz2 files : $(find /var/log -type f -name '*.bz2' 2>/dev/null | wc -l)"
+    echo "  .xz  files : $(find /var/log -type f -name '*.xz'  2>/dev/null | wc -l)"
+    echo "  .zip files : $(find /var/log -type f -name '*.zip' 2>/dev/null | wc -l)"
+    echo "  .1/.2 ..   : $(find /var/log -type f -name '*.[0-9]' 2>/dev/null | wc -l)"
+  } >> "$out"
+
+  section "JOURNALD CONFIGURATION (/etc/systemd/journald.conf)" "$out"
+  if [ -f /etc/systemd/journald.conf ]; then
+    grep -v '^#' /etc/systemd/journald.conf 2>/dev/null | grep -v '^$' >> "$out" \
+      || echo "(all defaults — no overrides set)" >> "$out"
+  else
+    echo "/etc/systemd/journald.conf not found" >> "$out"
+  fi
+  if [ -d /etc/systemd/journald.conf.d ]; then
+    echo "" >> "$out"
+    echo "Drop-ins in /etc/systemd/journald.conf.d/:" >> "$out"
+    for f in /etc/systemd/journald.conf.d/*.conf; do
+      [ -f "$f" ] || continue
+      echo "--- $f ---" >> "$out"
+      grep -v '^#' "$f" 2>/dev/null | grep -v '^$' >> "$out"
+    done
+  fi
+
+  section "JOURNALD DISK USAGE" "$out"
+  if cmd_exists journalctl; then
+    journalctl --disk-usage 2>/dev/null >> "$out" || echo "N/A" >> "$out"
+    echo "" >> "$out"
+    journalctl --list-boots --no-pager 2>/dev/null | head -10 >> "$out" || true
+  else
+    echo "journalctl not available" >> "$out"
   fi
 }
 
 collect_rpm_checksums() {
-  # For RPM systems: track verify status of key packages
   local out="$1"
   section "RPM VERIFY (critical packages)" "$out"
   if cmd_exists rpm; then
@@ -679,111 +843,16 @@ collect_docker() {
   fi
 }
 
-collect_log_rotation() {
-  # READ-ONLY: this function only reads config/state files and queries
-  # disk usage. The logrotate binary is NEVER invoked — we only read
-  # the config files and the state file it maintains.
-  local out="$1"
-
-  # ── Global logrotate config (read-only: cat of /etc/logrotate.conf) ──────
-  section "LOGROTATE GLOBAL CONFIG (/etc/logrotate.conf)" "$out"
-  if [ -f /etc/logrotate.conf ]; then
-    grep -v '^#' /etc/logrotate.conf 2>/dev/null | grep -v '^$' >> "$out"
-  else
-    echo "/etc/logrotate.conf not found" >> "$out"
-  fi
-
-  # ── Per-service logrotate configs (read-only: cat of /etc/logrotate.d/*) ─
-  section "LOGROTATE DROP-IN CONFIGS (/etc/logrotate.d/)" "$out"
-  if [ -d /etc/logrotate.d ]; then
-    for f in /etc/logrotate.d/*; do
-      [ -f "$f" ] || continue
-      echo "--- $f ---" >> "$out"
-      grep -v '^#' "$f" 2>/dev/null | grep -v '^$' >> "$out"
-      echo "" >> "$out"
-    done
-  else
-    echo "/etc/logrotate.d not found" >> "$out"
-  fi
-
-  # ── logrotate state file (read-only: cat of the state file) ──────────────
-  # This file is written by logrotate itself when it runs (via cron/systemd).
-  # We only READ it here to capture last-rotation timestamps — we never
-  # invoke logrotate or modify this file in any way.
-  section "LOGROTATE STATE FILE (last rotation timestamps)" "$out"
-  local state_file=""
-  for f in /var/lib/logrotate/status /var/lib/logrotate.status; do
-    [ -f "$f" ] && state_file="$f" && break
-  done
-  if [ -n "$state_file" ]; then
-    echo "State file: $state_file" >> "$out"
-    echo "" >> "$out"
-    cat "$state_file" 2>/dev/null >> "$out"   # read-only cat
-  else
-    echo "logrotate state file not found" >> "$out"
-  fi
-
-  # ── /var/log directory sizes ─────────────────────────────────────────────
-  section "LOG DIRECTORY SIZES (/var/log)" "$out"
-  du -sh /var/log/* 2>/dev/null | sort -rh | head -30 >> "$out"     || echo "N/A" >> "$out"
-  echo "" >> "$out"
-  echo "Total /var/log usage:" >> "$out"
-  du -sh /var/log 2>/dev/null >> "$out" || echo "N/A" >> "$out"
-
-  # ── Top 20 largest individual log files ──────────────────────────────────
-  section "LARGEST LOG FILES (top 20)" "$out"
-  find /var/log -type f 2>/dev/null     | xargs ls -lh 2>/dev/null     | sort -rh -k5     | awk '{print $5, $9}'     | head -20 >> "$out"     || echo "N/A" >> "$out"
-
-  # ── Compressed / rotated archive count ───────────────────────────────────
-  section "ROTATED LOG ARCHIVE COUNT (/var/log)" "$out"
-  {
-    echo "  .gz  files : $(find /var/log -type f -name '*.gz'  2>/dev/null | wc -l)"
-    echo "  .bz2 files : $(find /var/log -type f -name '*.bz2' 2>/dev/null | wc -l)"
-    echo "  .xz  files : $(find /var/log -type f -name '*.xz'  2>/dev/null | wc -l)"
-    echo "  .zip files : $(find /var/log -type f -name '*.zip' 2>/dev/null | wc -l)"
-    echo "  .1 / .2 .. : $(find /var/log -type f -name '*.[0-9]' 2>/dev/null | wc -l)"
-  } >> "$out"
-
-  # ── journald configuration ────────────────────────────────────────────────
-  section "JOURNALD CONFIGURATION (/etc/systemd/journald.conf)" "$out"
-  if [ -f /etc/systemd/journald.conf ]; then
-    grep -v '^#' /etc/systemd/journald.conf 2>/dev/null | grep -v '^$' >> "$out"       || echo "(all defaults — no overrides set)" >> "$out"
-  else
-    echo "/etc/systemd/journald.conf not found" >> "$out"
-  fi
-  # Also check drop-ins
-  if [ -d /etc/systemd/journald.conf.d ]; then
-    echo "" >> "$out"
-    echo "Drop-ins in /etc/systemd/journald.conf.d/:" >> "$out"
-    for f in /etc/systemd/journald.conf.d/*.conf; do
-      [ -f "$f" ] || continue
-      echo "--- $f ---" >> "$out"
-      grep -v '^#' "$f" 2>/dev/null | grep -v '^$' >> "$out"
-    done
-  fi
-
-  # ── journald disk usage ───────────────────────────────────────────────────
-  section "JOURNALD DISK USAGE" "$out"
-  if cmd_exists journalctl; then
-    journalctl --disk-usage 2>/dev/null >> "$out" || echo "N/A" >> "$out"
-    echo "" >> "$out"
-    # Per-boot journal sizes
-    journalctl --list-boots --no-pager 2>/dev/null | head -10 >> "$out" || true
-  else
-    echo "journalctl not available" >> "$out"
-  fi
-}
-
-# ── Master collect ────────────────────────────────────────────────────────────
+# ── Master collect ─────────────────────────────────────────────────────────────
 run_checks() {
   local out="$1"
   local mode_label="$2"
 
-  log "Starting $mode_label checks → ${out}"
+  log "Starting $mode_label checks -> ${out}"
 
   {
     echo "=========================================="
-    echo " PATCH CHECK REPORT — $mode_label"
+    echo " PATCH CHECK REPORT -- $mode_label"
     echo " Host      : ${HOSTNAME}"
     echo " Generated : $(date)"
     echo " Kernel    : $(uname -r)"
@@ -791,6 +860,7 @@ run_checks() {
   } > "$out"
 
   local steps=(
+    "Patch Level"        collect_patch_level
     "System Info"        collect_system_info
     "Installed Packages" collect_packages
     "Kernel Modules"     collect_kernel_modules
@@ -805,10 +875,10 @@ run_checks() {
     "Repositories"       collect_repos
     "Processes"          collect_processes
     "System Logs"        collect_system_logs
+    "Log Rotation"       collect_log_rotation
     "RPM Verify"         collect_rpm_checksums
     "File Integrity"     collect_file_integrity_hints
     "NTP/Time"           collect_ntp
-    "Log Rotation"       collect_log_rotation
     "HA Cluster"         collect_ha_cluster
     "Containers"         collect_docker
   )
@@ -819,16 +889,17 @@ run_checks() {
     local label="${steps[$i]}"
     local func="${steps[$((i+1))]}"
     log "  [$((i/2+1))/${total}] Collecting: ${label}"
-    # Call the function; pass $out and a secondary arg if needed
     if [ "$func" = "collect_packages" ]; then
       collect_packages "$out" ""
+    elif [ "$func" = "collect_patch_level" ]; then
+      collect_patch_level "$out" "$mode_label"
     else
       $func "$out"
     fi
     i=$((i+2))
   done
 
-  # Update the LATEST symlink so consumers always have a stable path
+  # Update the LATEST symlink
   local latest_link
   if [ "$mode_label" = "PRE" ]; then
     latest_link="$PRE_LATEST"
@@ -837,24 +908,24 @@ run_checks() {
   fi
   ln -sf "$out" "$latest_link"
 
-  success "$mode_label checks complete → $out"
-  log  "Symlink updated  → $latest_link"
+  success "$mode_label checks complete -> $out"
+  log  "Symlink updated  -> $latest_link"
 }
 
 # ── Compare ───────────────────────────────────────────────────────────────────
 run_compare() {
   if [ ! -f "$PRE_REPORT" ]; then
     error "Pre-patch report not found: $PRE_REPORT"
-    error "Run:  sudo $0 pre   before patching."
+    error "Run:  sudo bash $0 pre   before patching."
     exit 1
   fi
   if [ ! -f "$POST_REPORT" ]; then
     error "Post-patch report not found: $POST_REPORT"
-    error "Run:  sudo $0 post  after patching."
+    error "Run:  sudo bash $0 post  after patching."
     exit 1
   fi
 
-  log "Generating comparison report → ${COMPARE_REPORT}"
+  log "Generating comparison report -> ${COMPARE_REPORT}"
 
   {
     echo "=========================================================="
@@ -866,40 +937,77 @@ run_compare() {
     echo "=========================================================="
   } > "$COMPARE_REPORT"
 
+  # ── SCBrel patch level — FIRST section, screen + log ──
+  local PRE_SCBREL POST_SCBREL
+  PRE_SCBREL=$(awk '/^# PATCH LEVEL/{found=1;next} found && /^########################################/{exit} found && NF{print;exit}' \
+    "$PRE_REPORT" 2>/dev/null)
+  POST_SCBREL=$(awk '/^# PATCH LEVEL/{found=1;next} found && /^########################################/{exit} found && NF{print;exit}' \
+    "$POST_REPORT" 2>/dev/null)
+
+  PRE_SCBREL="${PRE_SCBREL:-(SCBrel package not found in PRE report)}"
+  POST_SCBREL="${POST_SCBREL:-(SCBrel package not found in POST report)}"
+
+  # Write to compare report file
+  {
+    echo ""
+    echo "=================================================="
+    echo " PATCH LEVEL (SCBrel)"
+    echo "=================================================="
+    echo "  PRE  (before patching) : ${PRE_SCBREL}"
+    echo "  POST (after  patching) : ${POST_SCBREL}"
+    if [ "$PRE_SCBREL" = "$POST_SCBREL" ]; then
+      echo "  STATUS : UNCHANGED -- patch level did not change"
+    else
+      echo "  STATUS : *** CHANGED *** -- patch level updated successfully"
+    fi
+    echo "=================================================="
+  } >> "$COMPARE_REPORT"
+
+  # Print on screen prominently
+  echo ""
+  echo -e "${BOLD}┌──────────────────────────────────────────────────────────┐${RESET}"
+  echo -e "${BOLD}│  PATCH LEVEL CHANGE (SCBrel)                             │${RESET}"
+  echo -e "${BOLD}├──────────────────────────────────────────────────────────┤${RESET}"
+  printf "${BOLD}│  %-10s : ${CYAN}%-45s${RESET}${BOLD}│${RESET}\n" "PRE (before)" "${PRE_SCBREL}"
+  printf "${BOLD}│  %-10s : ${CYAN}%-45s${RESET}${BOLD}│${RESET}\n" "POST (after)" "${POST_SCBREL}"
+  echo -e "${BOLD}├──────────────────────────────────────────────────────────┤${RESET}"
+  if [ "$PRE_SCBREL" = "$POST_SCBREL" ]; then
+    echo -e "${BOLD}│  STATUS : ${YELLOW}UNCHANGED${RESET}${BOLD} -- patch level did not change           │${RESET}"
+  else
+    echo -e "${BOLD}│  STATUS : ${GREEN}UPDATED ✔${RESET}${BOLD} -- patch level changed successfully     │${RESET}"
+  fi
+  echo -e "${BOLD}└──────────────────────────────────────────────────────────┘${RESET}"
+  echo ""
+
   # ── Kernel version ──
   {
     echo ""
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo "=================================================="
     echo " KERNEL VERSION"
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo "=================================================="
     PRE_KERN=$(grep '^Kernel' "$PRE_REPORT" | head -1 | awk '{print $NF}')
     POST_KERN=$(grep '^Kernel' "$POST_REPORT" | head -1 | awk '{print $NF}')
-    echo "  PRE  : ${PRE_KERN:-$(grep 'uname -r\|Kernel' "$PRE_REPORT" | head -1)}"
-    echo "  POST : ${POST_KERN:-$(grep 'uname -r\|Kernel' "$POST_REPORT" | head -1)}"
-    [ "$PRE_KERN" != "$POST_KERN" ] && echo "  *** KERNEL CHANGED ***" || echo "  (no change)"
+    echo "  PRE  : ${PRE_KERN:-(unknown)}"
+    echo "  POST : ${POST_KERN:-(unknown)}"
+    if [ "$PRE_KERN" != "$POST_KERN" ]; then
+      echo "  STATUS : *** KERNEL CHANGED ***"
+    else
+      echo "  STATUS : no change"
+    fi
   } >> "$COMPARE_REPORT"
-
-  # ── Helper: extract a section block from a report ──
-  extract_section() {
-    local file="$1" label="$2"
-    awk "/^# ${label}/{found=1; next} found && /^########################################/{exit} found{print}" "$file" 2>/dev/null
-  }
 
   # ── Package diff ──
   {
     echo ""
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo "=================================================="
     echo " PACKAGE CHANGES"
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo "=================================================="
   } >> "$COMPARE_REPORT"
 
-  # Extract package lines
   if grep -q '^ii' "$PRE_REPORT" 2>/dev/null; then
-    # Debian/Ubuntu style
     grep '^ii' "$PRE_REPORT"  | awk '{print $2"\t"$3}' | sort > /tmp/_pre_pkgs.txt
     grep '^ii' "$POST_REPORT" | awk '{print $2"\t"$3}' | sort > /tmp/_post_pkgs.txt
   else
-    # RPM style – lines are bare package strings in the INSTALLED PACKAGES section
     awk '/^# INSTALLED PACKAGES/{found=1; next} found && /^########################################/{exit} found{print}' \
       "$PRE_REPORT"  | grep -v '^$' | sort > /tmp/_pre_pkgs.txt
     awk '/^# INSTALLED PACKAGES/{found=1; next} found && /^########################################/{exit} found{print}' \
@@ -913,36 +1021,34 @@ run_compare() {
     echo ""
     echo "--- REMOVED PACKAGES ---"
     comm -23 /tmp/_pre_pkgs.txt /tmp/_post_pkgs.txt | head -200 || echo "  None"
-    # Updated = same name, different version (RPM only)
     echo ""
-    echo "--- UPDATED PACKAGES (name changed version) ---"
+    echo "--- UPDATED PACKAGES ---"
     if grep -q '^ii' "$PRE_REPORT" 2>/dev/null; then
       sort /tmp/_pre_pkgs.txt  > /tmp/_pre_pkgs_sorted.txt
       sort /tmp/_post_pkgs.txt > /tmp/_post_pkgs_sorted.txt
       join /tmp/_pre_pkgs_sorted.txt /tmp/_post_pkgs_sorted.txt \
         | awk '{if ($2 != $3) print "  " $1 "  " $2 " -> " $3}' | head -200 \
-        || echo "  (use dpkg --get-selections diff for full list)"
+        || echo "  None"
       rm -f /tmp/_pre_pkgs_sorted.txt /tmp/_post_pkgs_sorted.txt
     else
-      # RPM: strip epoch/version, compare
       awk '{sub(/\.[^.]+$/, "", $0); sub(/-[0-9].*$/, "", $0); print}' \
         /tmp/_pre_pkgs.txt  | sort -u > /tmp/_rpm_pre_names.txt
       awk '{sub(/\.[^.]+$/, "", $0); sub(/-[0-9].*$/, "", $0); print}' \
         /tmp/_post_pkgs.txt | sort -u > /tmp/_rpm_post_names.txt
       comm -12 /tmp/_rpm_pre_names.txt /tmp/_rpm_post_names.txt > /tmp/_common_names.txt
-      echo "  (Packages present in both PRE and POST — inspect version changes in full diff)"
+      echo "  (inspect full diff below for version deltas)"
       head -20 /tmp/_common_names.txt | sed 's/^/  /'
-      rm -f /tmp/_rpm_pre_names.txt /tmp/_rpm_post_names.txt
+      rm -f /tmp/_rpm_pre_names.txt /tmp/_rpm_post_names.txt /tmp/_common_names.txt
     fi
-    rm -f /tmp/_pre_pkgs.txt /tmp/_post_pkgs.txt /tmp/_common_names.txt
+    rm -f /tmp/_pre_pkgs.txt /tmp/_post_pkgs.txt
   } >> "$COMPARE_REPORT"
 
   # ── Service diff ──
   {
     echo ""
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo "=================================================="
     echo " SERVICE CHANGES"
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo "=================================================="
   } >> "$COMPARE_REPORT"
 
   awk '/^# SYSTEMD SERVICES .running./{found=1; next} found && /^########################################/{exit} found{print}' \
@@ -963,9 +1069,9 @@ run_compare() {
   # ── Listening port diff ──
   {
     echo ""
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo "=================================================="
     echo " LISTENING PORT CHANGES"
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo "=================================================="
   } >> "$COMPARE_REPORT"
 
   awk '/^# LISTENING PORTS/{found=1; next} found && /^########################################/{exit} found && /LISTEN/{print $5}' \
@@ -978,7 +1084,7 @@ run_compare() {
     echo "--- NEW LISTENING PORTS ---"
     comm -13 /tmp/_pre_ports.txt /tmp/_post_ports.txt || echo "  None"
     echo ""
-    echo "--- CLOSED PORTS (no longer listening) ---"
+    echo "--- CLOSED PORTS ---"
     comm -23 /tmp/_pre_ports.txt /tmp/_post_ports.txt || echo "  None"
     rm -f /tmp/_pre_ports.txt /tmp/_post_ports.txt
   } >> "$COMPARE_REPORT"
@@ -986,9 +1092,9 @@ run_compare() {
   # ── Disk usage diff ──
   {
     echo ""
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo "=================================================="
     echo " DISK USAGE CHANGES"
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo "=================================================="
   } >> "$COMPARE_REPORT"
 
   awk '/^# DISK USAGE/{found=1; next} found && /^########################################/{exit} found{print}' \
@@ -1006,9 +1112,9 @@ run_compare() {
   # ── Kernel module diff ──
   {
     echo ""
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo "=================================================="
     echo " KERNEL MODULE CHANGES"
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo "=================================================="
   } >> "$COMPARE_REPORT"
 
   awk '/^# LOADED KERNEL MODULES/{found=1; next} found && /^########################################/{exit} found{print $1}' \
@@ -1029,9 +1135,9 @@ run_compare() {
   # ── File integrity diff ──
   {
     echo ""
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo "=================================================="
     echo " KEY CONFIG FILE INTEGRITY CHANGES"
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo "=================================================="
   } >> "$COMPARE_REPORT"
 
   awk '/^# KEY CONFIG FILE CHECKSUMS/{found=1; next} found && /^########################################/{exit} found{print}' \
@@ -1050,112 +1156,108 @@ run_compare() {
   # ── Log rotation diff ──
   {
     echo ""
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo "=================================================="
     echo " LOG ROTATION CHANGES"
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo "=================================================="
   } >> "$COMPARE_REPORT"
 
-  # logrotate.conf diff
-  awk "/^# LOGROTATE GLOBAL CONFIG/{found=1;next} found && /^########################################/{exit} found{print}"     "$PRE_REPORT"  | grep -v "^$" | sort > /tmp/_pre_logrot.txt
-  awk "/^# LOGROTATE GLOBAL CONFIG/{found=1;next} found && /^########################################/{exit} found{print}"     "$POST_REPORT" | grep -v "^$" | sort > /tmp/_post_logrot.txt
+  awk '/^# LOGROTATE GLOBAL CONFIG/{found=1;next} found && /^########################################/{exit} found{print}' \
+    "$PRE_REPORT"  | grep -v '^$' | sort > /tmp/_pre_logrot.txt
+  awk '/^# LOGROTATE GLOBAL CONFIG/{found=1;next} found && /^########################################/{exit} found{print}' \
+    "$POST_REPORT" | grep -v '^$' | sort > /tmp/_post_logrot.txt
   {
     echo ""
     echo "--- logrotate.conf changes ---"
-    diff /tmp/_pre_logrot.txt /tmp/_post_logrot.txt       | grep -E "^[<>]" | sed "s/^< /PRE : /" | sed "s/^> /POST: /"       || echo "  No changes"
+    diff /tmp/_pre_logrot.txt /tmp/_post_logrot.txt \
+      | grep -E '^[<>]' | sed 's/^< /PRE : /' | sed 's/^> /POST: /' \
+      || echo "  No changes"
     rm -f /tmp/_pre_logrot.txt /tmp/_post_logrot.txt
   } >> "$COMPARE_REPORT"
 
-  # logrotate drop-in configs diff
-  awk "/^# LOGROTATE DROP-IN CONFIGS/{found=1;next} found && /^########################################/{exit} found{print}"     "$PRE_REPORT"  | grep -v "^$" | sort > /tmp/_pre_logd.txt
-  awk "/^# LOGROTATE DROP-IN CONFIGS/{found=1;next} found && /^########################################/{exit} found{print}"     "$POST_REPORT" | grep -v "^$" | sort > /tmp/_post_logd.txt
+  awk '/^# LOGROTATE DROP-IN CONFIGS/{found=1;next} found && /^########################################/{exit} found{print}' \
+    "$PRE_REPORT"  | grep -v '^$' | sort > /tmp/_pre_logd.txt
+  awk '/^# LOGROTATE DROP-IN CONFIGS/{found=1;next} found && /^########################################/{exit} found{print}' \
+    "$POST_REPORT" | grep -v '^$' | sort > /tmp/_post_logd.txt
   {
     echo ""
     echo "--- logrotate.d/* changes ---"
-    diff /tmp/_pre_logd.txt /tmp/_post_logd.txt       | grep -E "^[<>]" | sed "s/^< /PRE : /" | sed "s/^> /POST: /"       || echo "  No changes"
+    diff /tmp/_pre_logd.txt /tmp/_post_logd.txt \
+      | grep -E '^[<>]' | sed 's/^< /PRE : /' | sed 's/^> /POST: /' \
+      || echo "  No changes"
     rm -f /tmp/_pre_logd.txt /tmp/_post_logd.txt
   } >> "$COMPARE_REPORT"
 
-  # logrotate state (last rotation timestamps)
-  awk "/^# LOGROTATE STATE FILE/{found=1;next} found && /^########################################/{exit} found{print}"     "$PRE_REPORT"  | grep -v "^$" | sort > /tmp/_pre_lstate.txt
-  awk "/^# LOGROTATE STATE FILE/{found=1;next} found && /^########################################/{exit} found{print}"     "$POST_REPORT" | grep -v "^$" | sort > /tmp/_post_lstate.txt
+  awk '/^# LOGROTATE STATE FILE/{found=1;next} found && /^########################################/{exit} found{print}' \
+    "$PRE_REPORT"  | grep -v '^$' | sort > /tmp/_pre_lstate.txt
+  awk '/^# LOGROTATE STATE FILE/{found=1;next} found && /^########################################/{exit} found{print}' \
+    "$POST_REPORT" | grep -v '^$' | sort > /tmp/_post_lstate.txt
   {
     echo ""
     echo "--- logrotate state changes (rotation timestamps) ---"
-    diff /tmp/_pre_lstate.txt /tmp/_post_lstate.txt       | grep -E "^[<>]" | sed "s/^< /PRE : /" | sed "s/^> /POST: /"       || echo "  No changes"
+    diff /tmp/_pre_lstate.txt /tmp/_post_lstate.txt \
+      | grep -E '^[<>]' | sed 's/^< /PRE : /' | sed 's/^> /POST: /' \
+      || echo "  No changes"
     rm -f /tmp/_pre_lstate.txt /tmp/_post_lstate.txt
   } >> "$COMPARE_REPORT"
 
-  # /var/log sizes
-  awk "/^# LOG DIRECTORY SIZES/{found=1;next} found && /^########################################/{exit} found{print}"     "$PRE_REPORT"  | grep -v "^$" | sort > /tmp/_pre_logsz.txt
-  awk "/^# LOG DIRECTORY SIZES/{found=1;next} found && /^########################################/{exit} found{print}"     "$POST_REPORT" | grep -v "^$" | sort > /tmp/_post_logsz.txt
-  {
-    echo ""
-    echo "--- /var/log directory size changes ---"
-    diff /tmp/_pre_logsz.txt /tmp/_post_logsz.txt       | grep -E "^[<>]" | sed "s/^< /PRE : /" | sed "s/^> /POST: /"       || echo "  No changes"
-    rm -f /tmp/_pre_logsz.txt /tmp/_post_logsz.txt
-  } >> "$COMPARE_REPORT"
-
-  # journald disk usage
-  awk "/^# JOURNALD DISK USAGE/{found=1;next} found && /^########################################/{exit} found{print}"     "$PRE_REPORT"  | grep -v "^$" > /tmp/_pre_jdu.txt
-  awk "/^# JOURNALD DISK USAGE/{found=1;next} found && /^########################################/{exit} found{print}"     "$POST_REPORT" | grep -v "^$" > /tmp/_post_jdu.txt
+  awk '/^# JOURNALD DISK USAGE/{found=1;next} found && /^########################################/{exit} found{print}' \
+    "$PRE_REPORT"  | grep -v '^$' > /tmp/_pre_jdu.txt
+  awk '/^# JOURNALD DISK USAGE/{found=1;next} found && /^########################################/{exit} found{print}' \
+    "$POST_REPORT" | grep -v '^$' > /tmp/_post_jdu.txt
   {
     echo ""
     echo "--- journald disk usage change ---"
-    diff /tmp/_pre_jdu.txt /tmp/_post_jdu.txt       | grep -E "^[<>]" | sed "s/^< /PRE : /" | sed "s/^> /POST: /"       || echo "  No changes"
+    diff /tmp/_pre_jdu.txt /tmp/_post_jdu.txt \
+      | grep -E '^[<>]' | sed 's/^< /PRE : /' | sed 's/^> /POST: /' \
+      || echo "  No changes"
     rm -f /tmp/_pre_jdu.txt /tmp/_post_jdu.txt
-  } >> "$COMPARE_REPORT"
-
-  # journald config changes
-  awk "/^# JOURNALD CONFIGURATION/{found=1;next} found && /^########################################/{exit} found{print}"     "$PRE_REPORT"  | grep -v "^$" | sort > /tmp/_pre_jcfg.txt
-  awk "/^# JOURNALD CONFIGURATION/{found=1;next} found && /^########################################/{exit} found{print}"     "$POST_REPORT" | grep -v "^$" | sort > /tmp/_post_jcfg.txt
-  {
-    echo ""
-    echo "--- journald config changes ---"
-    diff /tmp/_pre_jcfg.txt /tmp/_post_jcfg.txt       | grep -E "^[<>]" | sed "s/^< /PRE : /" | sed "s/^> /POST: /"       || echo "  No changes"
-    rm -f /tmp/_pre_jcfg.txt /tmp/_post_jcfg.txt
   } >> "$COMPARE_REPORT"
 
   # ── Log error diff ──
   {
     echo ""
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo "=================================================="
     echo " NEW LOG ERRORS (present in POST, absent in PRE)"
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo "=================================================="
   } >> "$COMPARE_REPORT"
 
-  # Helper: extract a named log section from a report file into a temp file
   _extract_log_section() {
     local report="$1" section_label="$2" dest="$3"
-    awk "/^# ${section_label}/{found=1; next} found && /^########################################/{exit} found{print}"       "$report" 2>/dev/null | grep -v '^$' | sort -u > "$dest" || true
+    awk "/^# ${section_label}/{found=1; next} found && /^########################################/{exit} found{print}" \
+      "$report" 2>/dev/null | grep -v '^$' | sort -u > "$dest" || true
   }
 
-  local log_sections="JOURNALD ERRORS DMESG ERRORS SYSLOG ERRORS KERNEL LOG ERRORS AUTH ERRORS AUDIT LOG ERRORS FAILED SYSTEMD UNITS"
   local any_new_error=0
 
-  for section_label in       "JOURNALD ERRORS (priority: emerg/alert/crit/err)"       "DMESG ERRORS (err/crit/alert/emerg)"       "SYSLOG ERRORS (/var/log/messages or syslog)"       "KERNEL LOG ERRORS (/var/log/kern.log)"       "AUTH ERRORS (/var/log/auth.log or secure)"       "AUDIT LOG ERRORS (/var/log/audit/audit.log)"       "FAILED SYSTEMD UNITS (journald)"; do
+  for section_label in \
+      "JOURNALD ERRORS (priority: emerg/alert/crit/err)" \
+      "DMESG ERRORS (err/crit/alert/emerg)" \
+      "SYSLOG ERRORS (/var/log/messages or syslog)" \
+      "KERNEL LOG ERRORS (/var/log/kern.log)" \
+      "AUTH ERRORS (/var/log/auth.log or secure)" \
+      "AUDIT LOG ERRORS (/var/log/audit/audit.log)" \
+      "FAILED SYSTEMD UNITS (journald)"; do
 
     _extract_log_section "$PRE_REPORT"  "$section_label" /tmp/_log_pre.txt
     _extract_log_section "$POST_REPORT" "$section_label" /tmp/_log_post.txt
 
-    # Lines in POST not in PRE = new errors introduced after patching
     new_errors=$(comm -13 /tmp/_log_pre.txt /tmp/_log_post.txt 2>/dev/null || true)
-    # Lines in PRE not in POST = errors that went away after patching
     cleared_errors=$(comm -23 /tmp/_log_pre.txt /tmp/_log_post.txt 2>/dev/null || true)
 
     if [ -n "$new_errors" ] || [ -n "$cleared_errors" ]; then
       {
         echo ""
-        echo "  ┌─ $section_label"
+        echo "  +-- $section_label"
         if [ -n "$new_errors" ]; then
           any_new_error=1
-          echo "  │  [NEW — appeared after patching]"
-          echo "$new_errors" | sed 's/^/  │    /'
+          echo "  |  [NEW -- appeared after patching]"
+          echo "$new_errors" | sed 's/^/  |    /'
         fi
         if [ -n "$cleared_errors" ]; then
-          echo "  │  [CLEARED — gone after patching]"
-          echo "$cleared_errors" | sed 's/^/  │    /'
+          echo "  |  [CLEARED -- gone after patching]"
+          echo "$cleared_errors" | sed 's/^/  |    /'
         fi
-        echo "  └──"
+        echo "  +--"
       } >> "$COMPARE_REPORT"
     fi
     rm -f /tmp/_log_pre.txt /tmp/_log_post.txt
@@ -1165,22 +1267,22 @@ run_compare() {
     echo "  No new log errors detected after patching." >> "$COMPARE_REPORT"
   fi
 
-  # ── Full raw diff (trimmed) ──
+  # ── Full raw diff ──
   {
     echo ""
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    echo " FULL DIFF (PRE → POST)"
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo "=================================================="
+    echo " FULL DIFF (PRE -> POST)"
+    echo "=================================================="
     echo ""
   } >> "$COMPARE_REPORT"
   diff "$PRE_REPORT" "$POST_REPORT" >> "$COMPARE_REPORT" 2>/dev/null || true
 
   ln -sf "$COMPARE_REPORT" "$COMPARE_LATEST"
-  success "Comparison report saved → ${COMPARE_REPORT}"
-  log    "Symlink updated  → ${COMPARE_LATEST}"
+  success "Comparison report saved -> ${COMPARE_REPORT}"
+  log    "Symlink updated  -> ${COMPARE_LATEST}"
   echo ""
-  echo -e "${BOLD}Summary of key findings:${RESET}"
-  grep -E '^\*\*\*|CHANGED|NEW LISTENING|CLOSED PORTS|NEWLY INSTALLED|REMOVED|STARTED|STOPPED|MODULES|NEW — appeared|CLEARED — gone|No new log errors' \
+  echo -e "${BOLD}Quick summary (key changes):${RESET}"
+  grep -E 'CHANGED|UPDATED|NEW LISTENING|CLOSED|NEWLY INSTALLED|REMOVED|STARTED|STOPPED|MODULES|NEW --|CLEARED --|No new log' \
     "$COMPARE_REPORT" | head -60 || true
 }
 
@@ -1189,9 +1291,9 @@ usage() {
   echo ""
   echo -e "${BOLD}Usage:${RESET}  sudo bash $0 {pre|post|compare}"
   echo ""
-  echo "  pre      – Collect pre-patch snapshot  → pre/PRE_PATCH_<host>_YYYYMMDD.txt"
-  echo "  post     – Collect post-patch snapshot → post/POST_PATCH_<host>_YYYYMMDD.txt"
-  echo "  compare  – Generate diff report        → diff/COMPARISON_<host>_YYYYMMDD_HHMMSS.txt"
+  echo "  pre      -- Collect pre-patch snapshot  -> pre/PRE_PATCH_<host>_YYYYMMDD.txt"
+  echo "  post     -- Collect post-patch snapshot -> post/POST_PATCH_<host>_YYYYMMDD.txt"
+  echo "  compare  -- Generate diff report        -> diff/COMPARISON_<host>_YYYYMMDD_HHMMSS.txt"
   echo ""
   echo "Reports are saved under : ${REPORT_DIR}/"
   echo "Retention policy        : ${RETENTION_DAYS} days (6 months), auto-purged on each run"
@@ -1202,11 +1304,11 @@ usage() {
 # ── Main ──────────────────────────────────────────────────────────────────────
 check_root
 ensure_dirs
-purge_old_reports   # always run retention cleanup first
+purge_old_reports
 
 case "$MODE" in
   pre)
-    header "PRE-PATCH CHECKS  —  ${HOSTNAME}"
+    header "PRE-PATCH CHECKS  --  ${HOSTNAME}"
     run_checks "$PRE_REPORT" "PRE"
     echo ""
     log "Pre-patch report : ${PRE_REPORT}"
@@ -1214,7 +1316,7 @@ case "$MODE" in
     log "Now apply your patches, then run:  sudo bash $0 post"
     ;;
   post)
-    header "POST-PATCH CHECKS  —  ${HOSTNAME}"
+    header "POST-PATCH CHECKS  --  ${HOSTNAME}"
     run_checks "$POST_REPORT" "POST"
     echo ""
     log "Post-patch report: ${POST_REPORT}"
@@ -1222,7 +1324,7 @@ case "$MODE" in
     log "To compare, run:  sudo bash $0 compare"
     ;;
   compare)
-    header "COMPARISON REPORT  —  ${HOSTNAME}"
+    header "COMPARISON REPORT  --  ${HOSTNAME}"
     run_compare
     echo ""
     log "Full comparison  : ${COMPARE_REPORT}"
