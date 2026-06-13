@@ -873,76 +873,6 @@
       min-width: 10px;
     }
 
-    /* ── Topology ──────────────────────────────────────────────────────────────── */
-    .topo-node {
-      border: 1px solid var(--border);
-      border-radius: 8px;
-      padding: 12px 14px;
-      margin-bottom: 10px;
-      background: var(--surface);
-    }
-
-    .topo-node-hdr {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      font-weight: 600;
-      flex-wrap: wrap;
-    }
-
-    .topo-node-actions {
-      display: flex;
-      gap: 4px;
-      margin-left: auto;
-      flex-wrap: wrap;
-    }
-
-    .topo-pods {
-      margin-top: 10px;
-      padding-left: 18px;
-      display: flex;
-      flex-wrap: wrap;
-      gap: 6px;
-    }
-
-    .topo-pod {
-      display: flex;
-      align-items: center;
-      gap: 5px;
-      padding: 3px 8px;
-      border-radius: 4px;
-      font-size: 11px;
-      font-family: Consolas, monospace;
-      border: 1px solid;
-    }
-
-    .topo-pod-actions {
-      display: flex;
-      gap: 2px;
-      opacity: 0;
-      transition: opacity .15s;
-    }
-
-    .topo-pod:hover .topo-pod-actions {
-      opacity: 1;
-    }
-
-    .topo-act {
-      padding: 1px 5px;
-      border-radius: 3px;
-      font-size: 10px;
-      cursor: pointer;
-      border: none;
-      background: rgba(255, 255, 255, .08);
-      color: var(--text2);
-      line-height: 1.5;
-    }
-
-    .topo-act:hover {
-      background: var(--brand);
-      color: #fff;
-    }
-
     /* ── Port-forward table ────────────────────────────────────────────────────── */
     .pf-table {
       width: 100%;
@@ -1152,6 +1082,48 @@
       margin: 5px 10px;
       flex-shrink: 0;
     }
+
+    /* ── Production environment guard rail ─────────────────────────────────── */
+    .app-nav.prod-mode {
+      border-bottom-color: #B91C1C;
+    }
+
+    /* ── Command palette ───────────────────────────────────────────────────── */
+    .palette-item {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 8px 14px;
+      font-size: 13px;
+      cursor: pointer;
+      color: var(--text);
+    }
+
+    .palette-item .pi-kind {
+      font-size: 10px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: .05em;
+      color: var(--text3);
+      min-width: 78px;
+    }
+
+    .palette-item.pi-active,
+    .palette-item:hover {
+      background: var(--brand);
+      color: var(--brand-fg);
+    }
+
+    .palette-item.pi-active .pi-kind,
+    .palette-item:hover .pi-kind {
+      color: var(--brand-fg);
+      opacity: .8;
+    }
+
+    /* ── Log pod-prefix colors (multi-pod streaming) ───────────────────────── */
+    .lp-0 { color: #58A6FF; } .lp-1 { color: #3FB950; } .lp-2 { color: #D29922; }
+    .lp-3 { color: #BC8CFF; } .lp-4 { color: #39C5CF; } .lp-5 { color: #FF7B72; }
+    .lp-6 { color: #F778BA; } .lp-7 { color: #A5D6FF; }
   </style>
 </head>
 
@@ -1241,6 +1213,9 @@
     <span id="nav-ns" class="mono"
       style="font-size:12px;color:var(--brand);font-weight:700;max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"
       title="">—</span>
+
+    <span id="prod-badge" style="display:none;padding:2px 10px;border-radius:999px;background:var(--err-fg);color:#fff;font-size:11px;font-weight:800;letter-spacing:.06em"
+      title="This environment name contains 'prod' — destructive actions need typed confirmation">PROD</span>
 
     <div style="flex:1"></div>
 
@@ -1349,6 +1324,7 @@
         <input id="autorefresh-interval" type="number" value="30" min="5" max="600" class="inp inp-sm"
           style="width:52px" onchange="toggleAutoRefresh()" />
         <span style="font-size:11px;color:var(--text3)">s</span>
+        <button onclick="exportCsv()" class="btn btn-sm" title="Download the current (filtered) table as CSV">⬇ CSV</button>
         <span id="row-count" class="mono" style="font-size:11px;color:var(--text3);margin-left:6px"></span>
       </div>
 
@@ -1359,6 +1335,7 @@
         <button class="btn btn-sm" onclick="doEvents()" id="btn-events" disabled>⚡ Events</button>
         <button class="btn btn-sm" onclick="doYaml()" id="btn-yaml" disabled>📄 YAML</button>
         <button class="btn btn-sm" onclick="doTerminal()" id="btn-terminal" disabled>🖥 Terminal</button>
+        <button class="btn btn-sm" onclick="podFiles()" id="btn-files" disabled title="Upload / download files (kubectl cp)">📁 Files</button>
         <button class="btn btn-sm" onclick="doExec()" id="btn-exec" disabled title="Copy kubectl exec command to clipboard">📋 Copy exec</button>
         <button class="btn btn-sm" onclick="doRestart()" id="btn-restart" disabled>↺ Restart</button>
         <button class="btn btn-sm" onclick="doScale()" id="btn-scale" disabled>⚖ Scale</button>
@@ -1454,6 +1431,9 @@
               </label>
               <button onclick="startLogs()" class="btn btn-sm btn-success">▶ Start</button>
               <button onclick="stopLogs()" class="btn btn-sm btn-danger">■ Stop</button>
+              <input id="log-filter" type="text" class="inp inp-sm" style="width:150px"
+                placeholder="🔍 Filter (regex)…" oninput="applyLogFilter()" title="Show only lines matching this regex (case-insensitive)" />
+              <button onclick="toggleLogPause(this)" id="btn-log-pause" class="btn btn-sm" title="Pause auto-scroll">⏸ Pause</button>
               <button onclick="downloadLogs()" class="btn btn-sm">⬇ Download</button>
               <button onclick="clearLogs()"
                 style="font-size:11px;color:var(--text3);background:none;border:none;cursor:pointer">Clear</button>
@@ -1635,6 +1615,14 @@
                 </div>
               </div>
               <div class="coll-card">
+                <div class="coll-hdr" onclick="_coll('hc-orphans')"><span
+                    class="coll-arrow">&#x25B6;</span>&ensp;&#128123; Orphaned Pods<span id="hc-orphans-ct"
+                    style="font-weight:400;color:var(--text3)"></span></div>
+                <div id="hc-orphans" class="coll-body" style="display:none">
+                  <div id="health-orphans"></div>
+                </div>
+              </div>
+              <div class="coll-card">
                 <div class="coll-hdr" onclick="_coll('hc-pods')"><span class="coll-arrow">&#x25B6;</span>&ensp;Top Pods
                   &#x2014; CPU &amp; Memory</div>
                 <div id="hc-pods" class="coll-body" style="display:none">
@@ -1707,8 +1695,6 @@
               </div>
             </div>
           </div>
-
-          <!-- Topology -->
 
           <!-- HPA View -->
           <div id="pane-hpa" style="display:none;flex-direction:column;flex:1;overflow:hidden">
@@ -1976,15 +1962,71 @@
   </div>
 
   <div id="confirm-modal" class="modal-overlay">
-    <div class="modal-box" style="width:440px">
+    <div class="modal-box" style="width:440px;max-width:92vw;display:flex;flex-direction:column;max-height:88vh">
       <div class="modal-header"><span class="modal-title" id="confirm-title">Confirm</span></div>
-      <div class="modal-body">
-        <p id="confirm-msg" style="color:var(--text2);font-size:13px;margin-bottom:18px;white-space:pre-wrap"></p>
-        <div style="display:flex;gap:8px">
+      <div class="modal-body" style="overflow:auto;display:flex;flex-direction:column;min-height:0">
+        <p id="confirm-msg" style="color:var(--text2);font-size:13px;margin-bottom:14px;white-space:pre-wrap;flex-shrink:0"></p>
+        <pre id="confirm-diff" class="terminal"
+          style="display:none;margin:0 0 14px;border-radius:6px;max-height:46vh;overflow:auto;font-size:12px;flex-shrink:1"></pre>
+        <div id="confirm-typed-row" style="display:none;margin-bottom:14px;flex-shrink:0">
+          <label class="inp-label">Type <span id="confirm-typed-target" class="mono"
+              style="color:var(--err-fg);text-transform:none"></span> to confirm</label>
+          <input id="confirm-typed" type="text" class="inp" style="width:100%" autocomplete="off"
+            oninput="_confirmTypedCheck()" onkeydown="if(event.key==='Enter')_confirmExec()" />
+        </div>
+        <div style="display:flex;gap:8px;flex-shrink:0">
           <button id="confirm-ok-btn" class="btn btn-danger" style="flex:1" onclick="_confirmExec()">Confirm</button>
           <button onclick="_confirmCancel()" class="btn" style="flex:1">Cancel</button>
         </div>
       </div>
+    </div>
+  </div>
+
+  <!-- Pod Files Modal (kubectl cp) -->
+  <div id="podfiles-modal" class="modal-overlay">
+    <div class="modal-box" style="width:520px;max-width:95vw">
+      <div class="modal-header">
+        <span class="modal-title">&#128193; Pod Files</span>
+        <span id="podfiles-label" style="font-size:12px;color:var(--text3);font-family:Consolas,monospace;margin-left:8px"></span>
+        <div style="flex:1"></div>
+        <select id="podfiles-container" class="sel inp-sm" title="Container"></select>
+      </div>
+      <div class="modal-body">
+        <label class="inp-label">Upload to pod</label>
+        <div style="display:flex;gap:8px;margin-bottom:6px">
+          <input id="podfiles-upload-file" type="file" class="inp inp-sm" style="flex:1;min-width:0" />
+        </div>
+        <div style="display:flex;gap:8px;margin-bottom:16px">
+          <input id="podfiles-upload-path" type="text" class="inp inp-sm" style="flex:1"
+            placeholder="remote path, e.g. /tmp/ or /tmp/file.txt" />
+          <button onclick="podFilesUpload()" class="btn btn-sm btn-brand" id="podfiles-upload-btn">&#11014; Upload</button>
+        </div>
+        <div class="divider"></div>
+        <label class="inp-label">Download from pod</label>
+        <div style="display:flex;gap:8px;margin-bottom:10px">
+          <input id="podfiles-download-path" type="text" class="inp inp-sm" style="flex:1"
+            placeholder="remote file, e.g. /var/log/app.log"
+            onkeydown="if(event.key==='Enter')podFilesDownload()" />
+          <button onclick="podFilesDownload()" class="btn btn-sm btn-success" id="podfiles-download-btn">&#11015; Download</button>
+        </div>
+        <p id="podfiles-status" style="font-size:12px;min-height:16px;color:var(--text3);margin:0 0 8px"></p>
+        <p style="font-size:11px;color:var(--text3);margin:0">Note: kubectl cp requires the <span class="mono">tar</span> binary inside the container.</p>
+        <div style="display:flex;margin-top:12px">
+          <button onclick="closeModal('podfiles-modal')" class="btn" style="flex:1">Close</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Command Palette (Ctrl+K) -->
+  <div id="palette-modal" class="modal-overlay" style="align-items:flex-start;padding-top:12vh">
+    <div class="modal-box" style="width:520px;max-width:92vw">
+      <div style="padding:10px 12px;border-bottom:1px solid var(--border)">
+        <input id="palette-input" type="text" class="inp" style="width:100%" autocomplete="off"
+          placeholder="Jump to namespace, resource, tab… (Esc to close)" oninput="_paletteFilter()"
+          onkeydown="_paletteKey(event)" />
+      </div>
+      <div id="palette-list" style="max-height:46vh;overflow-y:auto;padding:4px 0"></div>
     </div>
   </div>
 
@@ -2035,6 +2077,9 @@
 
   <!-- ═══════════════════ JAVASCRIPT ═══════════════════════════════════════════ -->
   <script>
+    // Tenant namespace prefix injected by the backend (SKE_NS_PREFIX env var)
+    const NS_PREFIX = '{{ ns_prefix }}';
+
     const S = {
       activeEnv: '', namespace: 'default', resource: 'pods', allNs: false,
       rows: [], headers: [], filteredRows: [], selected: new Set(),
@@ -2044,6 +2089,7 @@
       sessWarnShown: false, sessExpiredShown: false, sessToastEl: null,
       healthPollTimer: null,
       quotaAutoRefreshTimer: null,
+      logsPaused: false, isProd: false,
       _savedOutputH: '300px',
       activeMainTab: 'resources',
       _lastSubTab: 'output',
@@ -2094,6 +2140,11 @@
           e.preventDefault();
           if (S.activeMainTab === 'resources' && document.getElementById('login-overlay').style.display === 'none')
             refresh();
+        }
+        // Ctrl+K / Cmd+K → command palette
+        if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
+          e.preventDefault();
+          if (document.getElementById('login-overlay').style.display === 'none') openPalette();
         }
       });
 
@@ -2158,9 +2209,15 @@
         password: document.getElementById('f-pass').value,
         skectl_path: document.getElementById('f-skectl').value.trim(),
       };
-      const r = await fetch('/api/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
-      const d = await r.json();
-      btn.textContent = 'Login'; btn.disabled = false;
+      let d;
+      try {
+        const r = await fetch('/api/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+        d = await r.json();
+      } catch (ex) {
+        d = { ok: false, error: 'Could not reach the app backend — is it still running?' };
+      } finally {
+        btn.textContent = 'Login'; btn.disabled = false;
+      }
       if (!d.ok) { err.textContent = d.error || 'Login failed.'; err.style.display = 'block'; return; }
       if (document.getElementById('chk-save').checked) {
         const envName = document.getElementById('f-env-name').value.trim() || document.getElementById('env-select').value || 'default';
@@ -2179,6 +2236,10 @@
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ name: _lastEnv })
       });
+      // Production guard rail: env name containing "prod" gets a badge + typed delete confirmation
+      S.isProd = /prod/i.test(_lastEnv || '');
+      document.getElementById('prod-badge').style.display = S.isProd ? '' : 'none';
+      document.querySelector('.app-nav').classList.toggle('prod-mode', S.isProd);
       document.getElementById('login-overlay').style.display = 'none';
       switchMainTab('resources');
       startSessionPoll();
@@ -2206,6 +2267,9 @@
       S._loadedOnce = false;
       // Clear environment-specific state so pins from the previous env don't bleed into the next
       S.pinnedNs = []; S.activeEnv = ''; S.namespace = 'default';
+      S.isProd = false; _tpHist = {};
+      document.getElementById('prod-badge').style.display = 'none';
+      document.querySelector('.app-nav').classList.remove('prod-mode');
       switchMainTab('resources');
       document.getElementById('login-overlay').style.display = 'flex';
       document.getElementById('session-timer').textContent = '—';
@@ -2316,9 +2380,9 @@
       try {
         const r = await fetch('/api/namespaces'), d = await r.json();
         if (d.ok) {
-          // On initial load, filter to t-55547*
+          // On initial load, filter to the tenant namespace prefix
           if (!S._loadedOnce) {
-            clusterNs = (d.namespaces || []).filter(n => n.startsWith('t-55547'));
+            clusterNs = (d.namespaces || []).filter(n => n.startsWith(NS_PREFIX));
             S._loadedOnce = true;
           } else {
             clusterNs = d.namespaces || [];
@@ -2455,8 +2519,9 @@
       }
       if (S.resource === 'pods') {
         const lp = document.getElementById('log-pod'), cur = lp.value;
-        lp.innerHTML = d.rows.map(r => `<option value=\"${escHtml(r.cells[0])}\">${escHtml(r.cells[0])}</option>`).join('');
-        if (cur && d.rows.some(r => r.cells[0] === cur)) lp.value = cur;
+        const allOpt = d.rows.length > 1 ? '<option value="__all__">★ All pods</option>' : '';
+        lp.innerHTML = allOpt + d.rows.map(r => `<option value=\"${escHtml(r.cells[0])}\">${escHtml(r.cells[0])}</option>`).join('');
+        if (cur && ((cur === '__all__' && d.rows.length > 1) || d.rows.some(r => r.cells[0] === cur))) lp.value = cur;
       }
       if (!silent) hideProcessingOverlay();
     }
@@ -2477,9 +2542,6 @@
       });
       el.querySelectorAll('.ingress-card').forEach(card => {
         card.style.display = !q || card.textContent.toLowerCase().includes(q) ? '' : 'none';
-      });
-      el.querySelectorAll('.topo-node').forEach(node => {
-        node.style.display = !q || node.textContent.toLowerCase().includes(q) ? '' : 'none';
       });
     }
     function renderTable() {
@@ -2550,7 +2612,7 @@
         el.style.display = ''; el.disabled = (n === 0);
       }
       // Pods only
-      for (const id of ['btn-logs','btn-terminal','btn-exec']) {
+      for (const id of ['btn-logs','btn-terminal','btn-exec','btn-files']) {
         const el = document.getElementById(id); if (!el) continue;
         el.style.display = isPod ? '' : 'none'; el.disabled = (n === 0);
       }
@@ -2642,7 +2704,8 @@
       const names = selectedNames(); if (!names.length) return;
       if (!await _confirm('Delete Resources',
         `Delete ${names.length} ${S.resource}(s) in "${S.namespace}"?\n${names.slice(0, 5).join(', ')}${names.length > 5 ? '…' : ''}\n\nThis cannot be undone!`,
-        'Delete', 'btn-danger')) return;
+        'Delete', 'btn-danger',
+        S.isProd ? { requireText: names[0] } : {})) return;
       switchTab('output');
       const r = await fetch('/api/delete', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ type: S.resource, names, namespace: S.namespace, all: S.allNs }) });
       const d = await r.json();
@@ -2664,6 +2727,14 @@
     function doScale() {
       const names = selectedNames(); if (!names.length) return;
       if (!['deployments', 'replicasets', 'statefulsets'].includes(S.resource)) { toast('Not supported', 'Scale works for deployments, replicasets, statefulsets.', 'warn'); return; }
+      if (names.length > 1) {
+        // Bulk: confirmScale falls back to all selected rows when _scaleCtx is null
+        _scaleCtx = null;
+        document.getElementById('scale-val').value = '1';
+        document.getElementById('scale-modal').querySelector('.modal-title').textContent = `⚖ Scale — ${names.length} selected`;
+        openModal('scale-modal');
+        return;
+      }
       _openScaleFor(S.resource, names[0], S.namespace); // Fix #1: was hardcoded 'deployments'
     }
     // Reusable scale opener — sets hidden context then shows modal
@@ -2678,7 +2749,7 @@
       closeModal('scale-modal');
       const replicas = parseInt(document.getElementById('scale-val').value, 10);
       switchMainTab('resources'); switchTab('output');
-      // Use topology context if available, otherwise fall back to main resource table selection
+      // Single-target context if set, otherwise scale every selected row (bulk)
       const targets = _scaleCtx
         ? [{ type: _scaleCtx.type, name: _scaleCtx.name, ns: _scaleCtx.ns }]
         : selectedNames().map(n => ({ type: S.resource, name: n, ns: S.namespace }));
@@ -2703,6 +2774,72 @@
     function copyName() {
       const names = selectedNames();
       if (names.length) copyText(names.join('\n'), names.join(', '));
+    }
+
+    // ── Pod file transfer (kubectl cp) ────────────────────────────────────────────
+    let _podFilesCtx = null;
+    async function podFiles() {
+      const names = selectedNames(); if (!names.length) return;
+      const pod = names[0], ns = S.namespace;
+      _podFilesCtx = { pod, ns };
+      document.getElementById('podfiles-label').textContent = `${pod} (${ns})`;
+      document.getElementById('podfiles-status').textContent = '';
+      const sel = document.getElementById('podfiles-container');
+      sel.innerHTML = '<option value="">— default container —</option>';
+      openModal('podfiles-modal');
+      try {
+        const r = await fetch(`/api/containers?pod=${encodeURIComponent(pod)}&namespace=${encodeURIComponent(ns)}`), d = await r.json();
+        if ((d.containers || []).length > 1)
+          sel.innerHTML = '<option value="">— default container —</option>' + d.containers.map(c => `<option>${escHtml(c)}</option>`).join('');
+      } catch (_) { }
+    }
+    function _podFilesStatus(msg, ok) {
+      const st = document.getElementById('podfiles-status');
+      st.textContent = msg;
+      st.style.color = ok === undefined ? 'var(--text3)' : ok ? 'var(--ok-fg)' : 'var(--err-fg)';
+    }
+    async function podFilesUpload() {
+      const f = document.getElementById('podfiles-upload-file').files[0];
+      const remote = document.getElementById('podfiles-upload-path').value.trim();
+      if (!_podFilesCtx || !f || !remote) { _podFilesStatus('Choose a file and enter a remote path.', false); return; }
+      const fd = new FormData();
+      fd.append('pod', _podFilesCtx.pod); fd.append('namespace', _podFilesCtx.ns);
+      fd.append('container', document.getElementById('podfiles-container').value);
+      fd.append('remote', remote); fd.append('file', f);
+      const btn = document.getElementById('podfiles-upload-btn');
+      btn.disabled = true; _podFilesStatus('Uploading…');
+      try {
+        const r = await fetch('/api/podfs/upload', { method: 'POST', body: fd });
+        const d = await r.json();
+        _podFilesStatus(d.ok ? d.output : (d.output || d.error || 'Upload failed'), d.ok);
+      } catch (e) { _podFilesStatus(String(e), false); }
+      finally { btn.disabled = false; }
+    }
+    async function podFilesDownload() {
+      const remote = document.getElementById('podfiles-download-path').value.trim();
+      if (!_podFilesCtx || !remote) { _podFilesStatus('Enter a remote file path.', false); return; }
+      const btn = document.getElementById('podfiles-download-btn');
+      btn.disabled = true; _podFilesStatus('Downloading…');
+      try {
+        const p = new URLSearchParams({
+          pod: _podFilesCtx.pod, namespace: _podFilesCtx.ns,
+          container: document.getElementById('podfiles-container').value, remote
+        });
+        const r = await fetch(`/api/podfs/download?${p}`);
+        const ct = r.headers.get('Content-Type') || '';
+        if (ct.includes('application/json')) {
+          const d = await r.json();
+          _podFilesStatus(d.error || 'Download failed', false);
+        } else {
+          const blob = await r.blob();
+          const a = document.createElement('a');
+          a.href = URL.createObjectURL(blob);
+          a.download = remote.split('/').pop() || 'download';
+          a.click(); URL.revokeObjectURL(a.href);
+          _podFilesStatus(`Downloaded ${a.download} (${blob.size.toLocaleString()} bytes)`, true);
+        }
+      } catch (e) { _podFilesStatus(String(e), false); }
+      finally { btn.disabled = false; }
     }
 
     // ── Rollout ───────────────────────────────────────────────────────────────────
@@ -2762,14 +2899,27 @@
     function editorAddKey() { document.getElementById('editor-rows').appendChild(makeEditorRow('', '')); }
     async function saveEditor() {
       const m = document.getElementById('editor-modal');
-      if (!await _confirm('Save Changes',
-        `Save changes to ${m.dataset.resType}/${m.dataset.name} in "${m.dataset.namespace}"?\n\nThis will apply the updated data to the cluster.`,
-        'Save', 'btn-success')) return;
       const data = {};
       for (const row of document.querySelectorAll('#editor-rows .editor-row')) {
         const k = row.querySelector('input').value.trim(), v = row.querySelector('textarea').value;
         if (k) data[k] = v;
       }
+      // Preview the diff before applying
+      let opts = {};
+      showProcessingOverlay('Computing diff…');
+      try {
+        const dr = await fetch('/api/editor', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ type: m.dataset.resType, name: m.dataset.name, namespace: m.dataset.namespace, data, diff_only: true })
+        });
+        const dd = await dr.json();
+        opts = { diff: dd.ok ? dd.diff : `(diff unavailable: ${dd.error || 'unknown error'})` };
+      } catch (_) {
+        opts = { diff: '(diff unavailable — backend unreachable)' };
+      } finally { hideProcessingOverlay(); }
+      if (!await _confirm('Save Changes',
+        `Save changes to ${m.dataset.resType}/${m.dataset.name} in "${m.dataset.namespace}"?\n\nReview the diff below — this will apply the updated data to the cluster.`,
+        'Save', 'btn-success', opts)) return;
       const r = await fetch('/api/editor', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ type: m.dataset.resType, name: m.dataset.name, namespace: m.dataset.namespace, data })
@@ -2801,7 +2951,17 @@
     async function applyYaml() {
       const yaml = document.getElementById('yaml-edit').value.trim();
       if (!yaml) { toast('Empty', 'Nothing to apply.', 'warn'); return; }
-      if (!await _confirm('Apply YAML', 'Apply this YAML to the cluster?\n\nThis will create or update resources.', 'Apply', 'btn-success')) return;
+      // Preview the server-side diff before anything is applied
+      let opts = {};
+      showProcessingOverlay('Computing diff…');
+      try {
+        const dr = await fetch('/api/diff', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ yaml }) });
+        const dd = await dr.json();
+        opts = { diff: dd.ok ? dd.diff : `(diff unavailable: ${dd.error || 'unknown error'})` };
+      } catch (_) {
+        opts = { diff: '(diff unavailable — backend unreachable)' };
+      } finally { hideProcessingOverlay(); }
+      if (!await _confirm('Apply YAML', 'Review the changes below, then apply to the cluster.', 'Apply', 'btn-success', opts)) return;
       const r = await fetch('/api/apply', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ yaml }) });
       const d = await r.json(); cancelYamlEdit(); switchTab('output');
       appendOutput(`» ${d.command}\n`, 'cmd'); appendOutput(d.output + '\n', d.ok ? 'ok' : 'err');
@@ -2812,8 +2972,9 @@
     async function onLogPodChange() {
       const pod = document.getElementById('log-pod').value, ns = document.getElementById('ns-select').value;
       if (!pod) return;
-      const r = await fetch(`/api/containers?pod=${encodeURIComponent(pod)}&namespace=${encodeURIComponent(ns)}`), d = await r.json();
       const sel = document.getElementById('log-cnt');
+      if (pod === '__all__') { sel.innerHTML = '<option value="">— all —</option>'; return; }
+      const r = await fetch(`/api/containers?pod=${encodeURIComponent(pod)}&namespace=${encodeURIComponent(ns)}`), d = await r.json();
       sel.innerHTML = '<option value="">— all —</option>' + (d.containers || []).map(c => `<option>${escHtml(c)}</option>`).join('');
     }
     function doLogs() {
@@ -2823,14 +2984,22 @@
     }
     function startLogs() {
       S.logSource && S.logSource.close();
-      const pod = document.getElementById('log-pod').value, cnt = document.getElementById('log-cnt').value,
+      const podSel = document.getElementById('log-pod');
+      const pod = podSel.value, cnt = document.getElementById('log-cnt').value,
         tail = document.getElementById('log-tail').value || '300', prev = document.getElementById('chk-prev').checked,
         follow = document.getElementById('chk-follow').checked,
         ns = document.getElementById('ns-select').value;
       if (!pod) { toast('No pod', 'Select a pod first.', 'warn'); return; }
+      const multi = pod === '__all__';
+      const podList = multi
+        ? [...podSel.options].map(o => o.value).filter(v => v && v !== '__all__').slice(0, 15)
+        : [pod];
+      if (!podList.length) { toast('No pods', 'No pods available to stream.', 'warn'); return; }
       const out = document.getElementById('log-output');
-      out.innerHTML += `<span class="t-info">═══ ${escHtml(pod)}${cnt ? ' [' + escHtml(cnt) + ']' : ''} tail=${tail}${follow ? ' follow' : ''}${prev ? ' prev' : ''} ═══\n</span>`;
-      const params = new URLSearchParams({ pod, namespace: ns, container: cnt, tail, previous: prev, follow });
+      const hdr = multi ? `${podList.length} pods` : `${escHtml(pod)}${cnt ? ' [' + escHtml(cnt) + ']' : ''}`;
+      out.innerHTML += `<span class="t-info">═══ ${hdr} tail=${tail}${follow ? ' follow' : ''}${prev ? ' prev' : ''} ═══\n</span>`;
+      const params = new URLSearchParams({ namespace: ns, container: multi ? '' : cnt, tail, previous: prev, follow });
+      if (multi) params.set('pods', podList.join(',')); else params.set('pod', pod);
       S.logSource = new EventSource(`/api/logs/stream?${params}`);
       S.logSource.onmessage = e => {
         const msg = JSON.parse(e.data);
@@ -2840,7 +3009,7 @@
           if (document.getElementById('chk-autoreconnect').checked) { appendLogLine('[reconnecting in 5s…]', 'dim'); setTimeout(startLogs, 5000); }
           return;
         }
-        appendLogLine(msg.text);
+        appendLogLine(msg.text, null, msg.pod);
       };
       S.logSource.onerror = () => {
         appendLogLine('[stream error]', 'err');
@@ -2848,15 +3017,48 @@
       };
     }
     function stopLogs() { S.logSource && S.logSource.close(); fetch('/api/logs/stop', { method: 'POST' }); appendLogLine('[stopped]', 'dim'); }
-    function appendLogLine(text, forceTag) {
+    function _podColorIdx(p) { let h = 0; for (let i = 0; i < p.length; i++) h = (h * 31 + p.charCodeAt(i)) >>> 0; return h % 8; }
+    function appendLogLine(text, forceTag, podName) {
       const el = document.getElementById('log-output'), tag = forceTag || logTag(text);
-      const span = document.createElement('span'); span.className = tag ? `log-${tag}` : ''; span.textContent = text + '\n';
-      el.appendChild(span); el.scrollTop = el.scrollHeight;
+      while (el.childElementCount > 8000) el.removeChild(el.firstChild);   // cap DOM growth
+      const span = document.createElement('span'); span.className = tag ? `log-${tag}` : '';
+      if (podName) {
+        const pre = document.createElement('span');
+        pre.className = 'lp-' + _podColorIdx(podName);
+        pre.textContent = `[${podName}] `;
+        span.appendChild(pre);
+        span.appendChild(document.createTextNode(text + '\n'));
+      } else {
+        span.textContent = text + '\n';
+      }
+      span.dataset.raw = (podName ? `[${podName}] ` : '') + text;
+      if (_logFilterRe && !_logFilterRe.test(span.dataset.raw)) span.style.display = 'none';
+      el.appendChild(span);
+      if (!S.logsPaused) el.scrollTop = el.scrollHeight;
+    }
+    let _logFilterRe = null;
+    function applyLogFilter() {
+      const inp = document.getElementById('log-filter'), q = inp.value.trim();
+      try { _logFilterRe = q ? new RegExp(q, 'i') : null; inp.style.borderColor = ''; }
+      catch (_) { inp.style.borderColor = 'var(--err-fg)'; return; }   // invalid regex — keep last filter
+      const el = document.getElementById('log-output');
+      for (const sp of el.children) {
+        sp.style.display = (!_logFilterRe || _logFilterRe.test(sp.dataset.raw ?? sp.textContent)) ? '' : 'none';
+      }
+      if (!S.logsPaused) el.scrollTop = el.scrollHeight;
+    }
+    function toggleLogPause(btn) {
+      S.logsPaused = !S.logsPaused;
+      btn.textContent = S.logsPaused ? '▶ Resume' : '⏸ Pause';
+      btn.classList.toggle('btn-warn', S.logsPaused);
+      if (!S.logsPaused) { const el = document.getElementById('log-output'); el.scrollTop = el.scrollHeight; }
     }
     function logTag(l) { l = l.toLowerCase(); if (/error|exception|fatal|panic/.test(l)) return 'error'; if (/warn/.test(l)) return 'warn'; if (/\binfo\b|\bdebug\b/.test(l)) return 'info'; return ''; }
     function clearLogs() { document.getElementById('log-output').innerHTML = ''; }
     function downloadLogs() {
-      const text = document.getElementById('log-output').innerText, pod = document.getElementById('log-pod').value || 'pod';
+      const sel = document.getElementById('log-pod').value;
+      const pod = sel === '__all__' ? 'multi-pod' : (sel || 'pod');
+      const text = document.getElementById('log-output').innerText;
       const blob = new Blob([text], { type: 'text/plain' }), a = document.createElement('a');
       a.href = URL.createObjectURL(blob); a.download = `${pod}-logs-${new Date().toISOString().slice(0, 19).replace(/:/g, '-')}.txt`;
       a.click(); URL.revokeObjectURL(a.href);
@@ -3231,10 +3433,110 @@
       tbody.innerHTML = d.portforwards.map(pf => `
     <tr><td>${escHtml(pf.target)}</td><td style="color:var(--text3)">${escHtml(pf.ns)}</td>
     <td style="color:var(--ok-fg)">${escHtml(pf.local)}</td><td style="color:var(--info-fg)">${escHtml(pf.remote)}</td>
-    <td><button onclick="stopPortForward('${escHtml(pf.id)}')" class="btn btn-sm btn-danger">Stop</button></td></tr>`).join('');
+    <td style="display:flex;gap:4px">
+      <button onclick="openPfUrl('${escAttr(pf.local)}')" class="btn btn-sm" title="Open http://localhost:${escAttr(pf.local)} in your default browser">🌐 Open</button>
+      <button onclick="stopPortForward('${escHtml(pf.id)}')" class="btn btn-sm btn-danger">Stop</button>
+    </td></tr>`).join('');
       _filterRows(document.querySelector('#pane-portforward input[placeholder*="Filter"]')?.value || '', 'pf-content');
     }
     async function stopPortForward(id) { await fetch(`/api/portforward/${encodeURIComponent(id)}`, { method: 'DELETE' }); toast('Stopped', 'Port forward terminated.', 'warn'); loadPortForwards(); }
+
+    // ── CSV export of the current resource table ──────────────────────────────────
+    function exportCsv() {
+      if (!S.headers.length || !S.filteredRows.length) { toast('Nothing to export', 'Load a resource table first.', 'warn'); return; }
+      const esc = v => { v = String(v ?? ''); return /[",\n]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v; };
+      const lines = [S.headers.map(esc).join(',')];
+      for (const row of S.filteredRows) lines.push(S.headers.map((_, i) => esc(row.cells[i] || '')).join(','));
+      const blob = new Blob(['﻿' + lines.join('\r\n')], { type: 'text/csv' });
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = `${S.resource}-${S.allNs ? 'all-ns' : S.namespace}-${new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-')}.csv`;
+      a.click(); URL.revokeObjectURL(a.href);
+      toast('Exported', `${S.filteredRows.length} row(s) → ${a.download}`, 'ok');
+    }
+
+    // ── Sparklines for Top Pods (built up over Health refreshes) ──────────────────
+    let _tpHist = {};   // "ns/pod" → [{c: millicores, m: MiB}, …] (last 30 samples)
+    function _spark(vals, color) {
+      if (!vals || vals.length < 2) return '';
+      const w = 56, h = 14;
+      const max = Math.max(...vals, 1), min = Math.min(...vals, 0);
+      const pts = vals.map((v, i) =>
+        `${(i / (vals.length - 1) * w).toFixed(1)},${(h - 2 - (v - min) / (max - min || 1) * (h - 4)).toFixed(1)}`).join(' ');
+      return `<svg width="${w}" height="${h}" style="vertical-align:middle;margin-left:6px" title="trend over recent refreshes"><polyline points="${pts}" fill="none" stroke="${color}" stroke-width="1.5"/></svg>`;
+    }
+
+    // ── Command palette (Ctrl+K) ──────────────────────────────────────────────────
+    let _palItems = [], _palFiltered = [], _palIdx = 0;
+    function openPalette() {
+      _palItems = [];
+      // Namespaces
+      [...document.getElementById('ns-select').options].forEach(o => {
+        if (!o.value) return;
+        _palItems.push({
+          kind: 'namespace', label: o.textContent.replace(/^★ /, ''),
+          run: () => { document.getElementById('ns-select').value = o.value; switchMainTab('resources'); onNsChange(); }
+        });
+      });
+      // Resource types
+      [...document.getElementById('res-select').options].forEach(o => _palItems.push({
+        kind: 'resource', label: o.value,
+        run: () => { switchMainTab('resources'); document.getElementById('res-select').value = o.value; refresh(); }
+      }));
+      // Sidebar tabs
+      const tabLoaders = { health: loadHealth, hpa: loadHpa, ingress: loadIngresses, crds: loadCrds, jobs: loadJobsPanel, netpol: loadNetpolicies };
+      [['resources', 'Resources'], ['health', 'Health'], ['hpa', 'HPA'], ['ingress', 'Ingress'],
+       ['crds', 'CRDs'], ['jobs', 'Jobs'], ['netpol', 'Net Policies'], ['compliance', 'Compliance']].forEach(([id, label]) =>
+        _palItems.push({ kind: 'tab', label, run: () => { switchMainTab(id); (tabLoaders[id] || (() => { }))(); } }));
+      // Actions
+      _palItems.push({ kind: 'action', label: 'Refresh table', run: refresh });
+      _palItems.push({ kind: 'action', label: 'Reload namespaces', run: () => reloadNs().then(refresh) });
+      _palItems.push({ kind: 'action', label: 'Export table as CSV', run: exportCsv });
+      _palItems.push({ kind: 'action', label: 'Toggle dark mode', run: toggleDark });
+      _palItems.push({ kind: 'action', label: 'Renew session', run: doRenew });
+      const inp = document.getElementById('palette-input');
+      inp.value = '';
+      openModal('palette-modal');
+      _paletteFilter();
+      setTimeout(() => inp.focus(), 50);
+    }
+    function _paletteFilter() {
+      const q = document.getElementById('palette-input').value.toLowerCase().trim();
+      _palFiltered = (!q ? _palItems
+        : _palItems.filter(it => it.label.toLowerCase().includes(q) || it.kind.startsWith(q))).slice(0, 30);
+      _palIdx = 0;
+      _paletteRender();
+    }
+    function _paletteRender() {
+      document.getElementById('palette-list').innerHTML = _palFiltered.map((it, i) =>
+        `<div class="palette-item ${i === _palIdx ? 'pi-active' : ''}" onmousedown="event.preventDefault();_paletteRun(${i})">
+           <span class="pi-kind">${it.kind}</span><span>${escHtml(it.label)}</span></div>`).join('')
+        || '<div style="padding:14px;color:var(--text3);font-size:12px">No matches.</div>';
+    }
+    function _paletteKey(e) {
+      if (e.key === 'ArrowDown')      { e.preventDefault(); _palIdx = Math.min(_palIdx + 1, _palFiltered.length - 1); _paletteRender(); }
+      else if (e.key === 'ArrowUp')   { e.preventDefault(); _palIdx = Math.max(_palIdx - 1, 0); _paletteRender(); }
+      else if (e.key === 'Enter')     { e.preventDefault(); _paletteRun(_palIdx); }
+      else if (e.key === 'Escape')    { closeModal('palette-modal'); }
+    }
+    function _paletteRun(i) {
+      const it = _palFiltered[i];
+      if (!it) return;
+      closeModal('palette-modal');
+      it.run();
+    }
+
+    // ── Open a port-forward target in the system browser ──────────────────────────
+    async function openPfUrl(port) {
+      try {
+        const r = await fetch('/api/open-url', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ url: `http://localhost:${port}` })
+        });
+        const d = await r.json();
+        if (!d.ok) toast('Could not open', d.error || '', 'error');
+      } catch (e) { toast('Could not open', String(e), 'error'); }
+    }
 
     // ── Health ─────────────────────────────────────────────────────────────────────
     async function loadHealth() {
@@ -3323,6 +3625,32 @@
         </tr></thead><tbody>${prows}</tbody></table></div>`;
         }
       }
+      // Orphaned pods (no owning controller — won't be recreated if deleted)
+      const orphEl = document.getElementById('health-orphans');
+      if (orphEl) {
+        const op = d.orphaned_pods || [];
+        const ct = document.getElementById('hc-orphans-ct');
+        if (ct) ct.textContent = op.length ? ` — ${op.length}` : '';
+        if (!op.length) {
+          orphEl.innerHTML = '<p style="color:var(--ok-fg);font-size:12px">&#10003; No orphaned pods &#8212; every pod is managed by a controller.</p>';
+        } else {
+          const orows = op.map(o => `<tr class="row-warn">
+        <td style="font-family:Consolas,monospace">${escHtml(o.name)}</td>
+        <td style="color:var(--text3)">${escHtml(o.namespace)}</td>
+        <td>${statusBadge(o.phase)}</td>
+        <td class="mono" style="color:var(--text3)">${escHtml(o.age)}</td>
+        <td style="white-space:nowrap;display:flex;gap:4px;padding:4px 6px">
+          <button class="btn btn-sm" onclick="healthLogs('${escAttr(o.name)}','${escAttr(o.namespace)}','',false)" title="View logs">&#128203; Logs</button>
+          <button class="btn btn-sm" onclick="healthDescribe('${escAttr(o.name)}','${escAttr(o.namespace)}')" title="Describe pod">&#128269; Describe</button>
+          <button class="btn btn-sm btn-danger" style="padding:2px 7px" onclick="healthDeletePod('${escAttr(o.name)}','${escAttr(o.namespace)}')" title="Delete pod (will NOT be recreated)">&#128465;</button>
+        </td>
+      </tr>`).join('');
+          orphEl.innerHTML = `<p style="color:var(--warn-fg);font-size:12px;font-weight:700;margin-bottom:8px">&#128123; ${op.length} pod(s) not owned by any controller (manual runs / leftovers / selector mismatches). Deleting them is permanent:</p>
+      <div style="overflow-x:auto"><table class="pf-table"><thead><tr>
+        <th>Pod</th><th>Namespace</th><th>Phase</th><th>Age</th><th>Actions</th>
+      </tr></thead><tbody>${orows}</tbody></table></div>`;
+        }
+      }
       _filterRows(document.querySelector('#pane-health input[placeholder*="Filter"]')?.value || '', 'health-content');
       // Top pods section
       const podsEl = document.getElementById('health-pods');
@@ -3335,6 +3663,11 @@
           const parseMem = s => { const m = String(s).match(/^([\d.]+)(\D*)$/); if (!m) return 0; const u = (m[2] || '').toLowerCase(); const v = parseFloat(m[1]); return u.startsWith('g') ? v * 1024 : v; };
           // Attach numeric sort-keys to each row
           const enriched = tp.map(p => ({ ...p, _cpu: parseCpu(p.cpu), _mem: parseMem(p.memory) }));
+          // Record usage history for sparklines (one sample per Health load/poll, last 30 kept)
+          enriched.forEach(p => {
+            const k = `${p.namespace}/${p.name}`;
+            _tpHist[k] = [...(_tpHist[k] || []).slice(-29), { c: p._cpu, m: p._mem }];
+          });
           // Persist sort state on the element so re-renders keep the sort
           if (!podsEl._tpSort) podsEl._tpSort = { col: '_cpu', dir: -1 };
           const renderTopPods = (col, dir) => {
@@ -3353,11 +3686,12 @@
               const cpuPct = p._cpu / maxCpu, memPct = p._mem / maxMem;
               const cpuColor = cpuPct > 0.8 ? 'var(--err-fg)' : cpuPct > 0.5 ? 'var(--warn-fg)' : 'var(--ok-fg)';
               const memColor = memPct > 0.8 ? 'var(--err-fg)' : memPct > 0.5 ? 'var(--warn-fg)' : 'var(--ok-fg)';
+              const hist = _tpHist[`${p.namespace}/${p.name}`] || [];
               return `<tr>
             <td style="font-family:Consolas,monospace;max-width:320px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${escAttr(p.name)}">${escHtml(p.name)}</td>
             <td style="color:var(--text3)">${escHtml(p.namespace)}</td>
-            <td class="mono" style="color:${cpuColor}">${escHtml(p.cpu)}${bar(cpuPct, cpuColor)}</td>
-            <td class="mono" style="color:${memColor}">${escHtml(p.memory)}${bar(memPct, memColor)}</td>
+            <td class="mono" style="color:${cpuColor}">${escHtml(p.cpu)}${bar(cpuPct, cpuColor)}${_spark(hist.map(x => x.c), cpuColor)}</td>
+            <td class="mono" style="color:${memColor}">${escHtml(p.memory)}${bar(memPct, memColor)}${_spark(hist.map(x => x.m), memColor)}</td>
             <td style="white-space:nowrap;display:flex;gap:4px;padding:4px 6px">
               <button class="btn btn-sm" onclick="healthLogs('${escAttr(p.name)}','${escAttr(p.namespace)}','',false)">&#128203; Logs</button>
               <button class="btn btn-sm" onclick="healthDescribe('${escAttr(p.name)}','${escAttr(p.namespace)}')">&#128269; Describe</button>
@@ -3462,28 +3796,60 @@
     let _confirmOkCb = null;
     let _confirmResolve = null;
 
-    function showConfirm(title, msg, okLabel, okClass, cb) {
+    let _confirmRequired = '';   // typed-confirmation target text ('' = not required)
+
+    function _confirmSetup(title, msg, okLabel, okClass, opts = {}) {
       document.getElementById('confirm-title').textContent = title;
       document.getElementById('confirm-msg').textContent = msg;
       const btn = document.getElementById('confirm-ok-btn');
       btn.textContent = okLabel; btn.className = `btn ${okClass || 'btn-danger'}`; btn.style.flex = '1';
-      _confirmOkCb = cb; _confirmResolve = null; openModal('confirm-modal');
+      // Optional diff preview
+      const diffEl = document.getElementById('confirm-diff');
+      if (opts.diff !== undefined) {
+        diffEl.style.display = 'block';
+        diffEl.textContent = opts.diff || '(no changes detected — apply would be a no-op)';
+      } else {
+        diffEl.style.display = 'none'; diffEl.textContent = '';
+      }
+      // Optional typed confirmation (prod guard rail)
+      _confirmRequired = opts.requireText || '';
+      const row = document.getElementById('confirm-typed-row');
+      const inp = document.getElementById('confirm-typed');
+      inp.value = '';
+      if (_confirmRequired) {
+        document.getElementById('confirm-typed-target').textContent = _confirmRequired;
+        row.style.display = 'block'; btn.disabled = true;
+        setTimeout(() => inp.focus(), 60);
+      } else {
+        row.style.display = 'none'; btn.disabled = false;
+      }
+      openModal('confirm-modal');
     }
 
-    // Promise-based confirm — replaces native confirm() so no browser "127.0.0.1:5000 says" banner
-    function _confirm(title, msg, okLabel = 'Confirm', okClass = 'btn-danger') {
+    function _confirmTypedCheck() {
+      const ok = document.getElementById('confirm-typed').value.trim() === _confirmRequired;
+      document.getElementById('confirm-ok-btn').disabled = !ok;
+    }
+
+    function showConfirm(title, msg, okLabel, okClass, cb) {
+      _confirmOkCb = cb; _confirmResolve = null;
+      _confirmSetup(title, msg, okLabel, okClass);
+    }
+
+    // Promise-based confirm — replaces native confirm() so no browser "127.0.0.1:5000 says" banner.
+    // opts: { diff: '...' } shows a scrollable diff preview; { requireText: 'name' } requires typing it.
+    function _confirm(title, msg, okLabel = 'Confirm', okClass = 'btn-danger', opts = {}) {
       return new Promise(resolve => {
         if (_confirmResolve) { _confirmResolve(false); } // dismiss any stacked dialog
         _confirmResolve = resolve; _confirmOkCb = null;
-        document.getElementById('confirm-title').textContent = title;
-        document.getElementById('confirm-msg').textContent = msg;
-        const btn = document.getElementById('confirm-ok-btn');
-        btn.textContent = okLabel; btn.className = `btn ${okClass || 'btn-danger'}`; btn.style.flex = '1';
-        openModal('confirm-modal');
+        _confirmSetup(title, msg, okLabel, okClass, opts);
       });
     }
 
     function _confirmExec() {
+      if (_confirmRequired &&
+          document.getElementById('confirm-typed').value.trim() !== _confirmRequired) return;
+      _confirmRequired = '';
       closeModal('confirm-modal');
       if (_confirmOkCb) { const cb = _confirmOkCb; _confirmOkCb = null; cb(); }
       if (_confirmResolve) { const r = _confirmResolve; _confirmResolve = null; r(true); }
@@ -3491,7 +3857,7 @@
 
     function _confirmCancel() {
       closeModal('confirm-modal');
-      _confirmOkCb = null;
+      _confirmOkCb = null; _confirmRequired = '';
       if (_confirmResolve) { const r = _confirmResolve; _confirmResolve = null; r(false); }
     }
     async function _healthShowPodModal(titleHtml, pod, ns, apiUrl) {
@@ -3529,118 +3895,19 @@
       startLogs();
     }
     async function healthDeletePod(pod, ns) {
-      showConfirm('Delete Pod',
+      if (!await _confirm('Delete Pod',
         `Delete pod "${pod}" in namespace "${ns}"?\n\nThe pod will be terminated. If managed by a controller (Deployment/StatefulSet) it will be recreated automatically.\n\nThis cannot be undone.`,
         'Delete', 'btn-danger',
-        async () => {
-          const r = await fetch('/api/delete', {
-            method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ type: 'pods', names: [pod], namespace: ns, all: false })
-          });
-          const d = await r.json(), res = d.results?.[0];
-          if (res?.ok) { toast('Deleted', `Pod "${pod}" deleted.`, 'ok'); loadHealth(); }
-          else toast('Delete failed', res?.output || 'unknown error', 'error');
-        }
-      );
+        S.isProd ? { requireText: pod } : {})) return;
+      const r = await fetch('/api/delete', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ type: 'pods', names: [pod], namespace: ns, all: false })
+      });
+      const d = await r.json(), res = d.results?.[0];
+      if (res?.ok) { toast('Deleted', `Pod "${pod}" deleted.`, 'ok'); loadHealth(); }
+      else toast('Delete failed', res?.output || 'unknown error', 'error');
     }
 
-    async function loadTopology() {
-      const content = document.getElementById('topology-content');
-      content.innerHTML = '<p style="color:var(--text3);font-size:13px">Loading\u2026</p>';
-      const ns = document.getElementById('topo-ns-select')?.value || S.namespace;
-      const all = document.getElementById('chk-topo-allns')?.checked || false;
-      showProcessingOverlay('Loading Topology\u2026');
-      try {
-      const r = await fetch(`/api/topology?namespace=${encodeURIComponent(ns)}&all=${all}`), d = await r.json();
-      if (!d.ok) { content.innerHTML = `<p style="color:var(--err-fg);font-size:12px">${escHtml(d.error)}</p>`; return; }
-      if (!d.topology.length) { content.innerHTML = '<p style="color:var(--text3);font-size:13px">No deployments or pods found.</p>'; return; }
-      const phaseColor = p => { p = (p || '').toLowerCase(); if (p === 'running') return 'var(--ok-fg)'; if (p === 'pending') return 'var(--warn-fg)'; if (p === 'succeeded') return 'var(--info-fg)'; return 'var(--err-fg)'; };
-      content.innerHTML = d.topology.map(node => {
-        const icon = node.kind === 'Deployment' ? '\uD83D\uDCE6' : node.kind === 'Standalone' ? '\uD83D\uDD39' : '\uD83D\uDCCB';
-        const readyStr = node.kind === 'Deployment' ? `<span style="color:var(--text3);font-size:11px;margin-left:4px">(${node.ready || 0}/${node.replicas || 0} ready)</span>` : '';
-        // Per-deployment action buttons (only for Deployment and StatefulSet kinds)
-        const nodeActionsHtml = (node.kind === 'Deployment' || node.kind === 'StatefulSet') ? `
-      <div class="topo-node-actions">
-        <button class="topo-act" title="View Logs from all pods" onclick="topoLogsDeploy(${escAttr(JSON.stringify(node.pods.map(p => p.name)))},${escAttr(JSON.stringify(node.namespace))})">\uD83D\uDCCB Logs</button>
-        <button class="topo-act" title="Describe deployment" onclick="topoDescribeDeploy(${escAttr(JSON.stringify(node.name))},${escAttr(JSON.stringify(node.namespace))})">\uD83D\uDD0D Describe</button>
-        <button class="topo-act" title="View / Edit YAML" onclick="topoYamlDeploy(${escAttr(JSON.stringify(node.name))},${escAttr(JSON.stringify(node.namespace))})">\uD83D\uDCC4 YAML</button>
-        <button class="topo-act" title="Scale replicas" onclick="topoScaleDeploy(${escAttr(JSON.stringify(node.name))},${escAttr(JSON.stringify(node.namespace))})">\u2195 Scale</button>
-        <button class="topo-act" title="Rolling restart" style="color:var(--warn-fg)" onclick="topoRestartDeploy(${escAttr(JSON.stringify(node.name))},${escAttr(JSON.stringify(node.namespace))},'deployments')">\u27F3 Restart</button>
-      </div>` : '';
-        const pods = node.pods.map(p => {
-          const col = phaseColor(p.phase), rst = p.restarts > 0 ? `<span style="color:var(--warn-fg);font-size:10px"> \u21BA${p.restarts}</span>` : '';
-          const pa = escAttr(JSON.stringify(p.name)), na = escAttr(JSON.stringify(node.namespace));
-          return `<div class="topo-pod" style="border-color:${col};color:${col}">
-        <span>${escHtml(p.name)}</span><span style="color:var(--text3);font-size:10px">${escHtml(p.phase)}</span>${rst}
-        <span class="topo-pod-actions">
-          <button class="topo-act" title="Stream logs" onclick="topoPodLogs(${pa},${na})">\uD83D\uDCCB</button>
-          <button class="topo-act" title="Describe pod" onclick="topoPodDescribe(${pa},${na})">\uD83D\uDD0D</button>
-          <button class="topo-act" title="Exec shell" onclick="topoPodExec(${pa},${na})">\u26A1</button>
-          <button class="topo-act" title="Delete pod" style="color:var(--err-fg)" onclick="topoPodDelete(${pa},${na})">\uD83D\uDDD1</button>
-        </span>
-      </div>`;
-        }).join('');
-        return `<div class="topo-node">
-      <div class="topo-node-hdr">${icon} <span style="color:var(--text)">${escHtml(node.name)}</span><span style="color:var(--text3);font-size:11px">${escHtml(node.namespace)}</span>${readyStr}<span style="color:var(--text3);font-size:10px;margin-left:4px">${escHtml(node.kind)}</span>${nodeActionsHtml}</div>
-      ${node.pods.length ? `<div class="topo-pods">${pods}</div>` : '<div style="color:var(--text3);font-size:11px;padding-left:18px;margin-top:6px">No pods matched</div>'}
-    </div>`;
-      }).join('');
-      _filterRows(document.querySelector('#pane-topology input[placeholder*="Filter"]')?.value || '', 'topology-content');
-      } catch(e) {
-        content.innerHTML = `<p style="color:var(--err-fg);font-size:12px">Error loading topology: ${escHtml(String(e))}</p>`;
-      } finally {
-        hideProcessingOverlay();
-      }
-    }
-
-    // ── Topology actions ─────────────────────────────────────────────────────────
-    function topoRestartDeploy(name, ns, kind) {
-      showConfirm('Rolling Restart',
-        `Perform a rolling restart of ${kind}/${name} in namespace "${ns}"?\n\nAll pods will be restarted one by one. Running workloads keep serving.`,
-        'Restart', 'btn-warn',
-        async () => {
-          switchMainTab('resources'); switchTab('output');
-          const r = await fetch('/api/restart', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ type: kind, name, namespace: ns }) });
-          const d = await r.json(); appendOutput(`» ${d.command}\n`, 'cmd'); appendOutput(d.output + '\n', d.ok ? 'ok' : 'err');
-          if (d.ok) toast('Restarted', `${kind}/${name} rolling restart triggered.`, 'ok');
-          loadTopology();
-        });
-    }
-    function topoScaleDeploy(name, ns) {
-      _openScaleFor('deployments', name, ns);
-    }
-    async function topoDescribeDeploy(name, ns) {
-      _healthShowPodModal('\uD83D\uDD0D kubectl describe deployment', name, ns,
-        `/api/describe?type=deployments&name=${encodeURIComponent(name)}&namespace=${encodeURIComponent(ns)}`);
-    }
-    async function topoYamlDeploy(name, ns) {
-      switchMainTab('resources'); switchTab('yaml');
-      const p = new URLSearchParams({ type: 'deployments', name, namespace: ns, all: 'false' });
-      const r = await fetch(`/api/yaml?${p}`), d = await r.json();
-      cancelYamlEdit(); document.getElementById('yaml-output').textContent = d.output;
-      document.getElementById('yaml-output').scrollTop = 0;
-    }
-    function topoLogsDeploy(podNames, ns) {
-      // Stream logs for first pod of the deployment
-      if (!podNames || !podNames.length) { toast('No pods', 'No pods found for this deployment.', 'warn'); return; }
-      topoPodLogs(podNames[0], ns);
-    }
-    function topoPodLogs(pod, ns) {
-      healthLogs(pod, ns, '', false);
-    }
-    async function topoPodDescribe(pod, ns) {
-      _healthShowPodModal('\uD83D\uDD0D kubectl describe pod', pod, ns,
-        `/api/describe?type=pods&name=${encodeURIComponent(pod)}&namespace=${encodeURIComponent(ns)}`);
-    }
-    function topoPodExec(pod, ns) {
-      // Switch to Shell tab and pre-fill the exec command in the command input
-      switchMainTab('resources'); switchTab('custom');
-      const input = document.getElementById('term-cmd-input');
-      if (input) { input.value = `kubectl exec -it ${pod} -n ${ns} -- /bin/bash`; input.focus(); }
-    }
-    function topoPodDelete(pod, ns) {
-      healthDeletePod(pod, ns);
-    }
 
     // ── Quota Monitor ────────────────────────────────────────────────────────────
     async function addQuotaNs() {
