@@ -60,11 +60,26 @@ app = Flask(__name__)
 app.secret_key = os.urandom(24)
 sock = Sock(app)
 
+
+@app.before_request
+def _local_only():
+    """Reject requests whose Host header is not localhost (DNS-rebinding guard)
+    and cross-origin requests from other pages running in a local browser."""
+    host = (request.host or "").rsplit(":", 1)[0]
+    if host not in ("127.0.0.1", "localhost", "[::1]"):
+        return "Forbidden", 403
+    origin = request.headers.get("Origin", "")
+    if origin and not origin.startswith(("http://127.0.0.1", "http://localhost", "http://[::1]")):
+        return "Forbidden", 403
+
 # ─── Paths ─────────────────────────────────────────────────────────────────────
 KUBECTL_CMD = os.environ.get("KUBECTL_CMD", "kubectl")
 SKECTL_CMD  = os.environ.get("SKECTL_CMD",
                               "skectl.exe" if sys.platform == "win32" else "skectl")
 PORT        = int(os.environ.get("SKE_PORT", 5000))
+# Tenant namespace prefix — all-namespaces views are restricted to namespaces
+# starting with this prefix (override per team via SKE_NS_PREFIX env var)
+NS_PREFIX   = os.environ.get("SKE_NS_PREFIX", "t-55547")
 
 # ─── Local static assets (cached so the app works without CDN access) ──────────
 _ASSETS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
@@ -109,6 +124,20 @@ _log_stop       = threading.Event()
 _log_q          = queue.Queue()
 _portforwards   = {}            # id -> {proc, local, remote, target, ns}
 _pf_id_counter  = 0
+
+
+def _cleanup_children():
+    """Kill child kubectl processes (port-forwards, log streams) on app exit
+    so they don't keep running after the window is closed."""
+    _log_stop.set()
+    for pf in list(_portforwards.values()):
+        try:
+            pf["proc"].terminate()
+        except Exception:
+            pass
+
+import atexit
+atexit.register(_cleanup_children)
 
 # ─── Subprocess helpers ────────────────────────────────────────────────────────
 
@@ -204,6 +233,26 @@ def _decode_pw(stored: str) -> str:
         return stored  # legacy plain-text fallback
 
 
+# ─── Audit log ─────────────────────────────────────────────────────────────────
+AUDIT_PATH = os.path.join(os.path.expanduser("~"), ".ske_manager_audit.log")
+
+
+def _audit(action, ok, command, detail=""):
+    """Append one line per mutating action: when, who, what, result, command."""
+    try:
+        user = (_creds[2] if _creds else
+                os.environ.get("USERNAME") or os.environ.get("USER") or "?")
+        line = "\t".join([
+            datetime.now(tz=timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC"),
+            user, action, "OK" if ok else "FAIL", command,
+            detail.replace("\n", " ").strip()[:200],
+        ])
+        with open(AUDIT_PATH, "a", encoding="utf-8") as f:
+            f.write(line + "\n")
+    except Exception:
+        pass
+
+
 def _ns_flags(resource, namespace, all_ns):
     cluster_wide = resource in ("namespaces", "nodes", "persistentvolumes",
                                  "clusterroles", "clusterrolebindings")
@@ -295,7 +344,7 @@ def _fmt_age(secs):
 
 @app.route("/")
 def index():
-    return render_template("index.html")
+    return render_template("index.html", ns_prefix=NS_PREFIX)
 
 
 # ─── Routes: Auth ──────────────────────────────────────────────────────────────
@@ -320,7 +369,9 @@ def login():
     stdout, stderr, rc = run_cmd(args, timeout=30)
     if rc == 0:
         _creds = (ske, auth, user, pw_plain, skectl)
+        _audit("login", True, f"skectl login {ske} -u {user}")
         return jsonify(ok=True)
+    _audit("login", False, f"skectl login {ske} -u {user}")
     return jsonify(ok=False, error=(stderr or stdout).splitlines()[0][:120]), 401
 
 
@@ -346,6 +397,7 @@ def renew():
     ske, auth, user, pw, skectl = _creds
     args = [skectl, "login", ske, "-s", auth, "-u", user, "-p", pw]
     stdout, stderr, rc = run_cmd(args, timeout=30)
+    _audit("renew", rc == 0, f"skectl login {ske} -u {user}")
     if rc == 0:
         return jsonify(ok=True)
     return jsonify(ok=False, error=(stderr or stdout).splitlines()[0][:120]), 401
@@ -387,7 +439,7 @@ def resources():
     headers, rows = _parse_kubectl_table(stdout)
     cluster_wide = res in ("namespaces", "nodes", "persistentvolumes", "clusterroles", "clusterrolebindings")
     ns_col = None
-    # Always restrict to t-55547* namespaces for namespaced resources
+    # Always restrict to tenant-prefix namespaces for namespaced resources
     if not cluster_wide and headers:
         try:
             ns_col = headers.index("NAMESPACE")
@@ -395,13 +447,13 @@ def resources():
             ns_col = None
         if all_ns:
             if ns_col is not None:
-                rows = [row for row in rows if len(row.cells) > ns_col and row.cells[ns_col].startswith("t-55547")]
+                rows = [row for row in rows if len(row["cells"]) > ns_col and row["cells"][ns_col].startswith(NS_PREFIX)]
         else:
-            # Single namespace: if not t-55547*, return empty
-            if not ns.startswith("t-55547"):
+            # Single namespace: if outside the tenant prefix, return empty
+            if not ns.startswith(NS_PREFIX):
                 rows = []
             elif ns_col is not None:
-                rows = [row for row in rows if len(row.cells) > ns_col and row.cells[ns_col] == ns]
+                rows = [row for row in rows if len(row["cells"]) > ns_col and row["cells"][ns_col] == ns]
     return jsonify(ok=True, headers=headers, rows=rows, command=" ".join(args))
 
 
@@ -490,6 +542,7 @@ def delete():
     for name in names:
         args = [KUBECTL_CMD, "delete", res, name] + _ns_flags(res, ns, all_ns)
         stdout, stderr, rc = run_cmd(args, timeout=30)
+        _audit("delete", rc == 0, " ".join(args))
         outputs.append({"name": name, "ok": rc == 0,
                          "output": stdout if rc == 0 else stderr,
                          "command": " ".join(args)})
@@ -506,6 +559,7 @@ def scale():
     args     = [KUBECTL_CMD, "scale", f"{res}/{name}",
                 f"--replicas={replicas}"] + _ns_flags(res, ns, False)
     stdout, stderr, rc = run_cmd(args, timeout=30)
+    _audit("scale", rc == 0, " ".join(args))
     out = stdout if rc == 0 else stderr
     return jsonify(ok=(rc == 0), output=out, command=" ".join(args))
 
@@ -518,6 +572,7 @@ def restart():
     ns   = d.get("namespace", "default")
     args = [KUBECTL_CMD, "rollout", "restart", f"{res}/{name}"] + _ns_flags(res, ns, False)
     stdout, stderr, rc = run_cmd(args, timeout=30)
+    _audit("restart", rc == 0, " ".join(args))
     out = stdout if rc == 0 else stderr
     return jsonify(ok=(rc == 0), output=out, command=" ".join(args))
 
@@ -556,60 +611,79 @@ def stream_logs():
     global _log_stop, _log_q
 
     pod    = request.args.get("pod", "")
+    pods   = request.args.get("pods", "")       # comma-separated → multi-pod mode
     ns     = request.args.get("namespace", "default")
     cnt    = request.args.get("container", "")
     tail   = request.args.get("tail", "300")
     prev   = request.args.get("previous", "false") == "true"
     follow = request.args.get("follow", "false") == "true"
 
-    if not pod:
+    pod_list = ([p.strip() for p in pods.split(",") if p.strip()] if pods
+                else ([pod] if pod else []))
+    pod_list = pod_list[:15]   # safety cap on concurrent kubectl processes
+    if not pod_list:
         return jsonify(ok=False, error="pod required"), 400
+    multi = len(pod_list) > 1
 
     _log_stop.set()
     time.sleep(0.15)
     _log_stop.clear()
     _log_q = queue.Queue()
 
-    args = [KUBECTL_CMD, "logs", pod, "-n", ns, f"--tail={tail}"]
-    if follow:
-        args.append("-f")
-    if cnt:
-        args += ["-c", cnt]
-    if prev:
-        args += ["-p"]
+    def _args_for(pname):
+        a = [KUBECTL_CMD, "logs", pname, "-n", ns, f"--tail={tail}"]
+        if follow:
+            a.append("-f")
+        if cnt and not multi:        # container choice only meaningful for one pod
+            a += ["-c", cnt]
+        if prev:
+            a += ["-p"]
+        return a
 
     stop = _log_stop
     q    = _log_q
 
-    def _reader():
+    def _reader(pname):
         try:
             proc = subprocess.Popen(
-                args, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                _args_for(pname), stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                 text=True, bufsize=1, **_win_flags())
             for line in iter(proc.stdout.readline, ""):
                 if stop.is_set():
                     proc.terminate()
                     break
-                q.put(line.rstrip("\n"))
+                q.put((pname, line.rstrip("\n")))
             proc.wait()
         except Exception as e:
-            q.put(f"[ERROR] {e}")
+            q.put((pname, f"[ERROR] {e}"))
         finally:
-            q.put(None)
+            q.put((pname, None))   # this pod's stream is finished
 
-    threading.Thread(target=_reader, daemon=True).start()
+    for pname in pod_list:
+        threading.Thread(target=_reader, args=(pname,), daemon=True).start()
 
     def _generate():
-        yield f"data: {json.dumps({'type': 'cmd', 'text': ' '.join(args)})}\n\n"
-        while True:
+        if multi:
+            cmd_txt = f"kubectl logs --tail={tail}{' -f' if follow else ''} — {len(pod_list)} pods: {', '.join(pod_list)}"
+        else:
+            cmd_txt = " ".join(_args_for(pod_list[0]))
+        yield f"data: {json.dumps({'type': 'cmd', 'text': cmd_txt})}\n\n"
+        remaining = len(pod_list)
+        while remaining > 0:
             try:
-                line = q.get(timeout=20)
+                pname, line = q.get(timeout=20)
                 if line is None:
-                    yield f"data: {json.dumps({'type': 'done'})}\n\n"
-                    break
-                yield f"data: {json.dumps({'type': 'line', 'text': line})}\n\n"
+                    remaining -= 1
+                    if multi:
+                        yield f"data: {json.dumps({'type': 'line', 'pod': pname, 'text': '[stream ended]'})}\n\n"
+                    continue
+                evt = {'type': 'line', 'text': line}
+                if multi:
+                    evt['pod'] = pname
+                yield f"data: {json.dumps(evt)}\n\n"
             except queue.Empty:
                 yield ": ping\n\n"
+        yield f"data: {json.dumps({'type': 'done'})}\n\n"
 
     return Response(
         stream_with_context(_generate()),
@@ -700,6 +774,7 @@ def rollout_undo():
     if revision:
         args += [f"--to-revision={revision}"]
     stdout, stderr, rc = run_cmd(args, timeout=30)
+    _audit("rollout-undo", rc == 0, " ".join(args))
     out = stdout if rc == 0 else stderr
     return jsonify(ok=(rc == 0), output=out, command=" ".join(args))
 
@@ -753,10 +828,24 @@ def save_editor():
                            for k, v in new_data.items()}
         else:
             obj["data"] = new_data
+        # Diff-only mode: show what would change without applying
+        if d.get("diff_only"):
+            proc = subprocess.run(
+                [KUBECTL_CMD, "diff", "-f", "-"],
+                input=json.dumps(obj), capture_output=True, text=True,
+                timeout=30, **_win_flags())
+            # kubectl diff: 0 = no changes, 1 = differences, >1 = error
+            if proc.returncode in (0, 1):
+                diff = proc.stdout
+                if res == "secrets" and diff:
+                    diff = "(secret values are base64 in this diff)\n" + diff
+                return jsonify(ok=True, diff=diff, changed=(proc.returncode == 1))
+            return jsonify(ok=False, error=(proc.stderr or proc.stdout).strip())
         proc = subprocess.run(
             [KUBECTL_CMD, "apply", "-f", "-"],
             input=json.dumps(obj), capture_output=True, text=True,
             timeout=30, **_win_flags())
+        _audit("edit-data", proc.returncode == 0, f"kubectl apply ({res}/{name} -n {ns})")
         out = proc.stdout if proc.returncode == 0 else proc.stderr
         return jsonify(ok=(proc.returncode == 0), output=out)
     except Exception as e:
@@ -784,14 +873,15 @@ def health_overview():
     top_thread.start()
     try:
         pods   = json.loads(stdout).get("items", [])
-        # When all-namespaces, restrict to t-55547* namespaces only
+        # When all-namespaces, restrict to tenant-prefix namespaces only
         if all_ns:
-            pods = [pod for pod in pods if pod.get("metadata", {}).get("namespace", "").startswith("t-55547")]
-        counts       = {"running": 0, "pending": 0, "failed": 0,
+            pods = [pod for pod in pods if pod.get("metadata", {}).get("namespace", "").startswith(NS_PREFIX)]
+        counts        = {"running": 0, "pending": 0, "failed": 0,
                         "succeeded": 0, "unknown": 0, "total": len(pods)}
-        alerts       = []
-        pending_pods = []
-        now          = datetime.now(tz=timezone.utc)
+        alerts        = []
+        pending_pods  = []
+        orphaned_pods = []   # pods with no owner (manual kubectl run, leftovers)
+        now           = datetime.now(tz=timezone.utc)
         # For pending pod memory stats
         pending_pods_mem = []
         total_pending_mem_bytes = 0
@@ -804,6 +894,21 @@ def health_overview():
             elif phase == "failed":    counts["failed"]    += 1
             elif phase == "succeeded": counts["succeeded"] += 1
             else:                      counts["unknown"]   += 1
+            # Orphan check: no ownerReferences = not managed by any controller
+            if not (pod["metadata"].get("ownerReferences") or []) and phase != "succeeded":
+                start_str = pod.get("status", {}).get("startTime", "")
+                o_age = None
+                if start_str:
+                    try:
+                        o_age = (now - datetime.fromisoformat(
+                            start_str.replace("Z", "+00:00"))).total_seconds()
+                    except Exception:
+                        pass
+                orphaned_pods.append({
+                    "name": pname, "namespace": pns,
+                    "phase": pod.get("status", {}).get("phase", "Unknown"),
+                    "age": _fmt_age(o_age),
+                })
             cstatuses = pod.get("status", {}).get("containerStatuses", [])
             for cs in cstatuses:
                 reason = cs.get("state", {}).get("waiting", {}).get("reason", "")
@@ -847,10 +952,10 @@ def health_overview():
             parts = line.split()
             # all-namespaces: NAMESPACE  NAME  CPU  MEMORY
             # single-ns:      NAME  CPU  MEMORY
-            if all_ns and len(parts) >= 4 and parts[0].startswith("t-55547"):
+            if all_ns and len(parts) >= 4 and parts[0].startswith(NS_PREFIX):
                 top_pods.append({"namespace": parts[0], "name": parts[1],
                                  "cpu": parts[2], "memory": parts[3]})
-            elif not all_ns and len(parts) >= 3 and ns.startswith("t-55547"):
+            elif not all_ns and len(parts) >= 3 and ns.startswith(NS_PREFIX):
                 top_pods.append({"namespace": ns, "name": parts[0],
                                  "cpu": parts[1], "memory": parts[2]})
         # Format total pending memory
@@ -879,7 +984,8 @@ def health_overview():
                        pending_pods=pending_pods, top_pods=top_pods,
                        pending_pods_mem=pending_pods_mem,
                        total_pending_mem=total_pending_mem,
-                       quota_snapshot=quota_snapshot)
+                       quota_snapshot=quota_snapshot,
+                       orphaned_pods=orphaned_pods)
     except Exception as e:
         top_thread.join(timeout=1)
         return jsonify(ok=False, error=str(e)), 500
@@ -1094,64 +1200,103 @@ def apply_yaml():
         [KUBECTL_CMD, "apply", "-f", "-"],
         input=yaml_text, capture_output=True, text=True,
         timeout=30, **_win_flags())
+    _audit("apply", proc.returncode == 0, "kubectl apply -f -",
+           (proc.stdout or proc.stderr).strip())
     out = proc.stdout if proc.returncode == 0 else proc.stderr
     return jsonify(ok=(proc.returncode == 0), output=out, command="kubectl apply -f -")
 
 
-# ─── Routes: Topology ─────────────────────────────────────────────────────────
+@app.route("/api/diff", methods=["POST"])
+def diff_yaml():
+    """kubectl diff for the given manifest — used as a pre-apply preview."""
+    d         = request.json or {}
+    yaml_text = d.get("yaml", "").strip()
+    if not yaml_text:
+        return jsonify(ok=False, error="yaml required"), 400
+    try:
+        proc = subprocess.run(
+            [KUBECTL_CMD, "diff", "-f", "-"],
+            input=yaml_text, capture_output=True, text=True,
+            timeout=30, **_win_flags())
+    except subprocess.TimeoutExpired:
+        return jsonify(ok=False, error="kubectl diff timed out"), 500
+    # kubectl diff exit codes: 0 = no changes, 1 = differences found, >1 = error
+    if proc.returncode in (0, 1):
+        return jsonify(ok=True, diff=proc.stdout, changed=(proc.returncode == 1))
+    return jsonify(ok=False, error=(proc.stderr or proc.stdout).strip())
 
-@app.route("/api/topology")
-def topology():
-    ns     = request.args.get("namespace", "default")
-    all_ns = request.args.get("all", "false").lower() == "true"
-    ns_f   = ["--all-namespaces"] if all_ns else ["-n", ns]
 
-    nodes = {}
+# ─── Routes: Pod file transfer (kubectl cp) ───────────────────────────────────
 
-    dep_out, _, rc = run_cmd(
-        [KUBECTL_CMD, "get", "deployments", "-o", "json"] + ns_f, timeout=20)
-    if rc == 0:
-        for dep in json.loads(dep_out).get("items", []):
-            dname    = dep["metadata"]["name"]
-            dns      = dep["metadata"].get("namespace", ns)
-            selector = dep.get("spec", {}).get("selector", {}).get("matchLabels", {})
-            nodes[f"{dns}/{dname}"] = {
-                "kind": "Deployment", "name": dname, "namespace": dns,
-                "replicas": dep.get("spec", {}).get("replicas", 0),
-                "ready":    dep.get("status", {}).get("readyReplicas", 0),
-                "selector": selector, "pods": []
-            }
+@app.route("/api/podfs/upload", methods=["POST"])
+def podfs_upload():
+    import tempfile
+    pod       = request.form.get("pod", "").strip()
+    ns        = request.form.get("namespace", "default")
+    container = request.form.get("container", "").strip()
+    remote    = request.form.get("remote", "").strip()
+    f         = request.files.get("file")
+    if not pod or not remote or f is None:
+        return jsonify(ok=False, error="pod, remote path and file are required"), 400
+    if remote.endswith("/"):
+        remote += f.filename
+    tmp = tempfile.NamedTemporaryFile(delete=False)
+    try:
+        f.save(tmp.name)
+        tmp.close()
+        args = [KUBECTL_CMD, "cp", tmp.name, f"{ns}/{pod}:{remote}"]
+        if container:
+            args += ["-c", container]
+        stdout, stderr, rc = run_cmd(args, timeout=120)
+        _audit("cp-upload", rc == 0, f"kubectl cp {f.filename} {ns}/{pod}:{remote}")
+        err = (stderr or stdout).strip()
+        if rc != 0 and "tar" in err:
+            err += "  (kubectl cp requires the 'tar' binary inside the container)"
+        return jsonify(ok=(rc == 0),
+                       output=f"Uploaded {f.filename} → {pod}:{remote}" if rc == 0 else err,
+                       command=" ".join(args))
+    finally:
+        try:
+            os.unlink(tmp.name)
+        except Exception:
+            pass
 
-    pod_out, _, rc = run_cmd(
-        [KUBECTL_CMD, "get", "pods", "-o", "json"] + ns_f, timeout=20)
-    if rc == 0:
-        for pod in json.loads(pod_out).get("items", []):
-            pname   = pod["metadata"]["name"]
-            pns     = pod["metadata"].get("namespace", ns)
-            labels  = pod["metadata"].get("labels", {})
-            phase   = pod.get("status", {}).get("phase", "Unknown")
-            restarts = sum(cs.get("restartCount", 0)
-                           for cs in pod.get("status", {}).get("containerStatuses", []))
-            matched = False
-            for key, dep in nodes.items():
-                if dep["namespace"] != pns:
-                    continue
-                sel = dep.get("selector", {})
-                if sel and all(labels.get(k) == v for k, v in sel.items()):
-                    dep["pods"].append({"name": pname, "phase": phase, "restarts": restarts})
-                    matched = True
-                    break
-            if not matched:
-                key = f"{pns}/__standalone__"
-                if key not in nodes:
-                    nodes[key] = {"kind": "Standalone", "name": "Standalone Pods",
-                                  "namespace": pns, "pods": []}
-                nodes[key]["pods"].append({"name": pname, "phase": phase, "restarts": restarts})
 
-    result = list(nodes.values())
-    if all_ns:
-        result = [n for n in result if n["namespace"].startswith("t-55547")]
-    return jsonify(ok=True, topology=result)
+@app.route("/api/podfs/download")
+def podfs_download():
+    import tempfile
+    from flask import send_file
+    pod       = request.args.get("pod", "").strip()
+    ns        = request.args.get("namespace", "default")
+    container = request.args.get("container", "").strip()
+    remote    = request.args.get("remote", "").strip()
+    if not pod or not remote:
+        return jsonify(ok=False, error="pod and remote path are required"), 400
+    fname = os.path.basename(remote.rstrip("/")) or "download"
+    local = os.path.join(tempfile.mkdtemp(prefix="ske_cp_"), fname)
+    args  = [KUBECTL_CMD, "cp", f"{ns}/{pod}:{remote}", local]
+    if container:
+        args += ["-c", container]
+    stdout, stderr, rc = run_cmd(args, timeout=120)
+    if rc != 0 or not os.path.exists(local) or os.path.getsize(local) == 0:
+        err = (stderr or stdout).strip() or "kubectl cp produced no file"
+        if "tar" in err:
+            err += "  (kubectl cp requires the 'tar' binary inside the container)"
+        return jsonify(ok=False, error=err)
+    return send_file(local, as_attachment=True, download_name=fname)
+
+
+# ─── Routes: Open URL in system browser ───────────────────────────────────────
+
+@app.route("/api/open-url", methods=["POST"])
+def open_url():
+    """Open a local URL (port-forward target) in the system default browser."""
+    url = ((request.json or {}).get("url") or "").strip()
+    if not url.startswith(("http://localhost:", "http://127.0.0.1:")):
+        return jsonify(ok=False, error="Only local URLs can be opened"), 400
+    import webbrowser
+    webbrowser.open(url)
+    return jsonify(ok=True)
 
 
 # ─── Routes: Pod Exec (terminal) ──────────────────────────────────────────────
@@ -1193,6 +1338,7 @@ def hpa_patch():
     args = [KUBECTL_CMD, "patch", "hpa", name, "-n", ns,
             "--type=merge", f"--patch={json.dumps(patch)}"]
     stdout, stderr, rc = run_cmd(args, timeout=20)
+    _audit("hpa-patch", rc == 0, " ".join(args))
     out = stdout if rc == 0 else (stderr or stdout)
     return jsonify(ok=(rc == 0), output=out, command=" ".join(args))
 
@@ -1212,9 +1358,9 @@ def hpa_list():
         items = json.loads(stdout).get("items", [])
         if items is None:
             items = []
-        # When all-namespaces, restrict to t-55547* namespaces only
+        # When all-namespaces, restrict to tenant-prefix namespaces only
         if all_ns:
-            items = [hpa for hpa in items if hpa.get("metadata", {}).get("namespace", "").startswith("t-55547")]
+            items = [hpa for hpa in items if hpa.get("metadata", {}).get("namespace", "").startswith(NS_PREFIX)]
         result = []
         for hpa in items:
             meta   = hpa.get("metadata", {}) or {}
@@ -1311,7 +1457,7 @@ def ingresses_detail():
                 "rules":     rules,
             })
         if all_ns:
-            result = [i for i in result if i["namespace"].startswith("t-55547")]
+            result = [i for i in result if i["namespace"].startswith(NS_PREFIX)]
         return jsonify(ok=True, ingresses=result)
     except Exception as e:
         return jsonify(ok=False, error=str(e)), 500
@@ -1439,8 +1585,8 @@ def jobs_panel():
                 "last_sched": _fmt_age(last_secs) if last_secs is not None else "never",
             })
     if all_ns:
-        jobs     = [j for j in jobs     if j["namespace"].startswith("t-55547")]
-        cronjobs = [c for c in cronjobs if c["namespace"].startswith("t-55547")]
+        jobs     = [j for j in jobs     if j["namespace"].startswith(NS_PREFIX)]
+        cronjobs = [c for c in cronjobs if c["namespace"].startswith(NS_PREFIX)]
     return jsonify(ok=True, jobs=jobs, cronjobs=cronjobs)
 
 
@@ -1457,6 +1603,7 @@ def trigger_cronjob():
         job_name = f"{name[:40]}-manual-{ts}"
     args = [KUBECTL_CMD, "create", "job", job_name, f"--from=cronjob/{name}", "-n", ns]
     stdout, stderr, rc = run_cmd(args, timeout=30)
+    _audit("cronjob-trigger", rc == 0, " ".join(args))
     out = stdout if rc == 0 else stderr
     return jsonify(ok=(rc == 0), output=out, command=" ".join(args))
 
@@ -1473,6 +1620,7 @@ def suspend_cronjob():
     args  = [KUBECTL_CMD, "patch", "cronjob", name, "-n", ns,
              "--type=merge", f"--patch={patch}"]
     stdout, stderr, rc = run_cmd(args, timeout=20)
+    _audit("cronjob-suspend" if suspend else "cronjob-resume", rc == 0, " ".join(args))
     out = stdout if rc == 0 else (stderr or stdout)
     return jsonify(ok=(rc == 0), output=out, command=" ".join(args))
 
@@ -2068,7 +2216,7 @@ def netpolicies():
         items = json.loads(stdout).get("items", [])
         if all_ns:
             items = [i for i in items
-                     if i.get("metadata", {}).get("namespace", "").startswith("t-55547")]
+                     if i.get("metadata", {}).get("namespace", "").startswith(NS_PREFIX)]
 
         def _peer(p):
             parts = []
