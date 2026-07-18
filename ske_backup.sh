@@ -116,6 +116,7 @@ trap _cleanup EXIT
 # Pure awk — no jq/python needed.
 _parse_manifest() {
     local release="$1" ns="$2"
+    _log "CMD     $HELM get manifest $release -n $ns"
     "$HELM" get manifest "$release" -n "$ns" 2>/dev/null | awk '
         /^---/          { kind=""; in_meta=0 }
         /^kind:/        { kind=$2; gsub(/[^a-zA-Z]/, "", kind) }
@@ -133,6 +134,7 @@ _parse_manifest() {
 # Fetch one named resource as YAML to a file; return 1 if missing / empty.
 _backup_resource() {
     local kind="$1" name="$2" ns="$3" outfile="$4"
+    _log "CMD     $KUBECTL get $kind $name -n $ns -o yaml"
     "$KUBECTL" get "$kind" "$name" -n "$ns" -o yaml 2>/dev/null > "$outfile"
     [[ -s "$outfile" ]]
 }
@@ -199,13 +201,16 @@ echo ""
 [[ -z "$LOGIN_PASS" ]] && _die "Password cannot be empty."
 
 _info "Authenticating with skectl…"
+_log "CMD     $SKECTL login $SKE_URL -s $AUTH_URL -u $LOGIN_USER -p ****"
 _login_out=$("$SKECTL" login "$SKE_URL" -s "$AUTH_URL" -u "$LOGIN_USER" -p "$LOGIN_PASS" 2>&1)
 _login_rc=$?
 if [[ $_login_rc -ne 0 ]]; then
+    _log "        skectl exit $_login_rc: $_login_out"
     _die "skectl login failed: ${_login_out}"
 fi
 _ok "Login successful."
 
+_log "CMD     $KUBECTL config current-context"
 KUBE_CTX=$("$KUBECTL" config current-context 2>/dev/null || printf "unknown")
 _ok "kubectl context : $KUBE_CTX"
 
@@ -220,6 +225,7 @@ ALL_REL_LINES=()   # raw helm list lines (for display)
 
 for _ns in "${NAMESPACES[@]}"; do
     _info "Querying namespace: $_ns"
+    _log "CMD     $HELM list -n $_ns --no-headers"
     while IFS= read -r _line; do
         [[ -z "$_line" ]] && continue
         _rname=$(awk '{print $1}' <<< "$_line")
@@ -274,15 +280,59 @@ for _r in "${CHOSEN_RELEASES[@]}"; do
 done
 
 # ==============================================================================
+#  STEP 5b — PRE-FETCH HELM MANIFESTS
+#  Done here so the component menu can show what actually exists, and so the
+#  backup phase can reuse the results without a second helm round-trip.
+# ==============================================================================
+_section "Fetching Helm Manifests"
+echo ""
+
+declare -A REL_MANIFEST_FILE   # "release|ns" → path of cached Kind/name file
+declare -A KIND_COUNTS          # Kind → total count across all chosen releases
+
+for _rel_entry in "${CHOSEN_RELEASES[@]}"; do
+    IFS='|' read -r _rel_name _rel_ns <<< "$_rel_entry"
+    _info "Fetching: $_rel_name  (ns: $_rel_ns)"
+
+    _mf=$(mktemp 2>/dev/null) || _mf="/tmp/ske_mf_${_rel_name}_$$"
+    _TMPFILES+=("$_mf")
+    _parse_manifest "$_rel_name" "$_rel_ns" > "$_mf"
+    REL_MANIFEST_FILE["$_rel_entry"]="$_mf"
+
+    _mf_count=$(wc -l < "$_mf" | tr -d '[:space:]')
+    _ok "$_rel_name: $_mf_count resource(s) in manifest"
+    _log "  Manifest $_rel_name (ns: $_rel_ns): $_mf_count resources"
+
+    while IFS='/' read -r _k _n; do
+        [[ -z "$_k" ]] && continue
+        KIND_COUNTS["$_k"]=$(( ${KIND_COUNTS["$_k"]:-0} + 1 ))
+    done < "$_mf"
+done
+
+# Log kind breakdown
+_log "  Kind breakdown across chosen releases:"
+for _k in "${COMP_KINDS[@]}"; do
+    _c="${KIND_COUNTS[$_k]:-0}"
+    [[ $_c -gt 0 ]] && _log "    $_k: $_c resource(s)"
+done
+
+# ==============================================================================
 #  STEP 6 — SELECT COMPONENT TYPES
 # ==============================================================================
 _section "Component Selection"
 echo ""
-printf "  ${cW}%-5s %s${cZ}\n" "#" "Component type"
-printf "  %s\n" "──────────────────────────────────────────────"
-printf "  %-5s %s\n" "0)" "All components"
+printf "  ${cW}%-5s %-40s %s${cZ}\n" "#" "Component type" "In selected releases"
+printf "  %s\n" "──────────────────────────────────────────────────────────────────"
+printf "  %-5s %-40s\n" "0)" "All components"
 for i in "${!COMP_LABELS[@]}"; do
-    printf "  %-5d %s\n" $((i+1)) "${COMP_LABELS[$i]}"
+    _ck="${KIND_COUNTS[${COMP_KINDS[$i]}]:-0}"
+    if [[ $_ck -gt 0 ]]; then
+        printf "  ${cG}%-5d${cZ} %-40s ${cG}%d resource(s)${cZ}\n" \
+            $((i+1)) "${COMP_LABELS[$i]}" "$_ck"
+    else
+        printf "  ${cY}%-5d${cZ} %-40s ${cY}(none)${cZ}\n" \
+            $((i+1)) "${COMP_LABELS[$i]}"
+    fi
 done
 echo ""
 echo "  Enter 0 for all, or comma-separated numbers  (e.g. 1,4,5)"
@@ -364,10 +414,8 @@ for _rel_entry in "${CHOSEN_RELEASES[@]}"; do
     printf "  ${cM}●  Release: %s   (ns: %s)${cZ}\n" "$_rel_name" "$_rel_ns"
     printf "\n--- %s (ns: %s)\n" "$_rel_name" "$_rel_ns" >> "$MANIFEST_FILE"
 
-    # Fetch all resources this helm release manages into a temp file
-    _mf=$(mktemp 2>/dev/null) || _mf="$BACKUP_ROOT/.tmp_${_rel_name}_$$"
-    _TMPFILES+=("$_mf")
-    _parse_manifest "$_rel_name" "$_rel_ns" > "$_mf"
+    # Use pre-fetched manifest (no second helm round-trip)
+    _mf="${REL_MANIFEST_FILE[$_rel_entry]}"
 
     _res_total=$(wc -l < "$_mf" | tr -d '[:space:]')
     if [[ "$_res_total" -eq 0 ]]; then
