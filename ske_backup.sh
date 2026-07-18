@@ -201,8 +201,10 @@ fi
 _session_valid=0
 if [[ "$_ctx_matches" -eq 1 ]]; then
     _info "Existing kubectl context matches this cluster ($_existing_ctx). Checking session…"
-    _log "CMD     $KUBECTL get ns --request-timeout=8s -o name"
-    if "$KUBECTL" get ns --request-timeout=8s -o name >/dev/null 2>&1; then
+    # Use a namespace-scoped call in the user's own namespace — cluster-scoped
+    # 'kubectl get ns' returns 403 on multi-tenant clusters even with a valid token.
+    _log "CMD     $KUBECTL get deployments -n ${NAMESPACES[0]} --request-timeout=8s"
+    if "$KUBECTL" get deployments -n "${NAMESPACES[0]}" --request-timeout=8s >/dev/null 2>&1; then
         _session_valid=1
     fi
 fi
