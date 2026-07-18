@@ -6,8 +6,7 @@
 # Requires: skectl, helm, kubectl in PATH (or override via env vars below)
 # Works in: MobaXterm local terminal (bash 4+, no jq required)
 # ==============================================================================
-
-# ─── ANSI colours (auto-disabled if output is not a terminal) ─────────────────
+#ANSI colours (auto-disabled if output is not a terminal)
 if [[ -t 1 ]]; then
     cR='\033[0;31m' cG='\033[0;32m' cY='\033[1;33m'
     cB='\033[0;34m' cC='\033[0;36m' cM='\033[0;35m'
@@ -28,29 +27,32 @@ _die()     { printf "\n  ${cR}✗ %s${cZ}\n\n"  "$*" >&2; _log "ERROR   $*"; exi
 _section() { printf "\n${cW}${cB}━━━  %s  ━━━${cZ}\n" "$*"; _log ""; _log "=== $* ==="; }
 
 # ─── TOOL PATHS  (override with env vars if tools are not in PATH) ────────────
-SKECTL="${SKECTL_CMD:-skectl}"
-KUBECTL="${KUBECTL_CMD:-kubectl}"
-HELM="${HELM_CMD:-helm}"
+# Confirmed working on this machine (MobaXterm /cygdrive/c/... mount style).
+# If skectl/kubectl/helm are already on your MobaXterm PATH, override with
+# env vars to use bare command names instead.
+SKECTL="${SKECTL_CMD:-/cygdrive/c/Users/1672557/goldenversions/skectl.exe}"
+KUBECTL="${KUBECTL_CMD:-/cygdrive/c/Users/1672557/goldenversions/kubectl.exe}"
+HELM="${HELM_CMD:-/cygdrive/c/Program Files/Helm/helm.exe}"
 
 # ==============================================================================
 #  CONFIGURATION — fill in your actual URLs before first use
 # ==============================================================================
 
 declare -A ENV_SKE_URL=(
-    [DF_1]="https://ske.df1.example.com"
-    [DF_2]="https://ske.df2.example.com"
+    [DF_1]="https://api-skez411-55547.df-2890.dev.azure.scbdev.net:6443"
+    [DF_2]="https://api-sket011-stg.50933.app.standardchartered.com:6443"
     [Prod]="https://ske.prod.example.com"
     [DR]="https://ske.dr.example.com"
 )
 declare -A ENV_AUTH_URL=(
-    [DF_1]="https://auth.df1.example.com"
-    [DF_2]="https://auth.df2.example.com"
+    [DF_1]="https://auth-stg.50933.app.standardchartered.com"
+    [DF_2]="https://auth-stg.50933.app.standardchartered.com"
     [Prod]="https://auth.prod.example.com"
     [DR]="https://auth.dr.example.com"
 )
 # Pre-fill username per env — leave blank to always prompt
 declare -A ENV_DEFAULT_USER=(
-    [DF_1]=""
+    [DF_1]="1672557"
     [DF_2]=""
     [Prod]=""
     [DR]=""
@@ -187,32 +189,56 @@ _info "SKE URL  : $SKE_URL"
 _info "Auth URL : $AUTH_URL"
 echo ""
 
-_def_user="${ENV_DEFAULT_USER[$SELECTED_ENV]}"
-if [[ -n "$_def_user" ]]; then
-    read -rp "  Username [$_def_user]: " _uname_in
-    LOGIN_USER="${_uname_in:-$_def_user}"
+# Skip re-login if kubectl's current context already points at this cluster
+# and the cached token still works (kubeconfig context names are the SKE
+# URL itself, e.g. "api-sket011-stg.50933.app.standardchartered.com:6443").
+_existing_ctx=$("$KUBECTL" config current-context 2>/dev/null)
+_ctx_matches=0
+if [[ -n "$_existing_ctx" && "$SKE_URL" == *"$_existing_ctx"* ]]; then
+    _ctx_matches=1
+fi
+
+_session_valid=0
+if [[ "$_ctx_matches" -eq 1 ]]; then
+    _info "Existing kubectl context matches this cluster ($_existing_ctx). Checking session…"
+    _log "CMD     $KUBECTL get ns --request-timeout=8s -o name"
+    if "$KUBECTL" get ns --request-timeout=8s -o name >/dev/null 2>&1; then
+        _session_valid=1
+    fi
+fi
+
+if [[ "$_session_valid" -eq 1 ]]; then
+    _ok "Existing login session is still valid — skipping skectl login."
+    KUBE_CTX="$_existing_ctx"
+    _ok "kubectl context : $KUBE_CTX"
 else
-    read -rp "  Username: " LOGIN_USER
+    _def_user="${ENV_DEFAULT_USER[$SELECTED_ENV]}"
+    if [[ -n "$_def_user" ]]; then
+        read -rp "  Username [$_def_user]: " _uname_in
+        LOGIN_USER="${_uname_in:-$_def_user}"
+    else
+        read -rp "  Username: " LOGIN_USER
+    fi
+    [[ -z "$LOGIN_USER" ]] && _die "Username cannot be empty."
+
+    read -srp "  Password: " LOGIN_PASS
+    echo ""
+    [[ -z "$LOGIN_PASS" ]] && _die "Password cannot be empty."
+
+    _info "Authenticating with skectl…"
+    _log "CMD     $SKECTL login $SKE_URL -s $AUTH_URL -u $LOGIN_USER -p ****"
+    _login_out=$("$SKECTL" login "$SKE_URL" -s "$AUTH_URL" -u "$LOGIN_USER" -p "$LOGIN_PASS" 2>&1)
+    _login_rc=$?
+    if [[ $_login_rc -ne 0 ]]; then
+        _log "        skectl exit $_login_rc: $_login_out"
+        _die "skectl login failed: ${_login_out}"
+    fi
+    _ok "Login successful."
+
+    _log "CMD     $KUBECTL config current-context"
+    KUBE_CTX=$("$KUBECTL" config current-context 2>/dev/null || printf "unknown")
+    _ok "kubectl context : $KUBE_CTX"
 fi
-[[ -z "$LOGIN_USER" ]] && _die "Username cannot be empty."
-
-read -srp "  Password: " LOGIN_PASS
-echo ""
-[[ -z "$LOGIN_PASS" ]] && _die "Password cannot be empty."
-
-_info "Authenticating with skectl…"
-_log "CMD     $SKECTL login $SKE_URL -s $AUTH_URL -u $LOGIN_USER -p ****"
-_login_out=$("$SKECTL" login "$SKE_URL" -s "$AUTH_URL" -u "$LOGIN_USER" -p "$LOGIN_PASS" 2>&1)
-_login_rc=$?
-if [[ $_login_rc -ne 0 ]]; then
-    _log "        skectl exit $_login_rc: $_login_out"
-    _die "skectl login failed: ${_login_out}"
-fi
-_ok "Login successful."
-
-_log "CMD     $KUBECTL config current-context"
-KUBE_CTX=$("$KUBECTL" config current-context 2>/dev/null || printf "unknown")
-_ok "kubectl context : $KUBE_CTX"
 
 # ==============================================================================
 #  STEP 4 — DISCOVER HELM RELEASES
@@ -387,8 +413,8 @@ _log "=== Backup Execution Log ==="
 _log "Script   : $0"
 _log "Backup dir: $BACKUP_ROOT"
 
-_ok "Backup directory: ${cW}$BACKUP_ROOT${cZ}"
-_ok "Execution log   : ${cW}${LOG_FILE##*/}${cZ}"
+_ok "Backup directory: $BACKUP_ROOT"
+_ok "Execution log   : ${LOG_FILE##*/}"
 echo ""
 
 MANIFEST_FILE="$BACKUP_ROOT/backup-manifest.txt"
@@ -477,8 +503,8 @@ _log "=== Backup complete ==="
 # ==============================================================================
 _section "Done"
 echo ""
-_ok "Backup directory : ${cW}$BACKUP_ROOT${cZ}"
-_ok "Files saved      : ${cW}$_total_saved${cZ}"
+_ok "Backup directory : $BACKUP_ROOT"
+_ok "Files saved      : $_total_saved"
 [[ $_total_skip -gt 0 ]] && \
     _warn "Not found        : $_total_skip  (in helm manifest but absent from cluster)"
 _ok "Manifest         : $MANIFEST_FILE"
