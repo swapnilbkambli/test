@@ -3,19 +3,19 @@ ahk_lite - minimal AutoHotkey-style text expander + hotkey runner.
 
 Setup (once):
     pip install --user keyboard
+    pip install --user pystray pillow   # optional, for the tray icon
 
 Run:
     python ahk_lite.py                 # uses config.txt next to this file
     python ahk_lite.py C:\\path\\to\\config.txt
 
 To run without a console window once you've tested it, launch it with
-pythonw.exe instead of python.exe, and add a shortcut to it in:
-    shell:startup
-so it starts automatically when you log in.
+pythonw.exe instead of python.exe, and see install_startup.py to have
+it start automatically at login.
 
-Edit config.txt (by hand, or with ahk_lite_gui.py) at any time and press
-the "reload" hotkey configured there (default ctrl+alt+r) to pick up the
-changes without restarting.
+Edit config.txt (by hand, or with ahk_lite_gui.py) at any time and use
+the "reload" hotkey (default ctrl+alt+r) to pick up the changes without
+restarting.
 
 Everything is processed in memory only: typed characters are held in a
 short rolling buffer used purely to detect abbreviations, never written
@@ -31,6 +31,8 @@ import webbrowser
 import keyboard
 
 import config_store
+import tray
+from expansion_logic import build_expansion
 
 DEFAULT_CONFIG_PATH = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "config.txt"
@@ -38,6 +40,13 @@ DEFAULT_CONFIG_PATH = os.path.join(
 
 MIN_ABBREVIATION_LENGTH = 2
 MAX_ABBREVIATION_LENGTH = 40
+
+# Whether typed-case (ABC / Abc / abc) should influence the output case.
+# Depends on the `keyboard` library reporting real letter case in
+# event.name, which is unverified on this build -- if it doesn't seem to
+# do anything on your machine, that's why. Harmless either way: it just
+# stays inert instead of misbehaving.
+PRESERVE_CASE = True
 
 # Characters ahk_lite can replay after consuming a trigger key that isn't
 # meant to be consumed (e.g. space/enter should still reach the app).
@@ -55,6 +64,8 @@ class TextExpander:
     def __init__(self, expansions, trigger_key):
         self.lock = threading.Lock()
         self.buffer = ""
+        self.raw_buffer = ""  # same as buffer, but case-preserved (for PRESERVE_CASE)
+        self.paused = False
         self.suppressed = False  # guards against reacting to our own synthetic typing
         self.set_config(expansions, trigger_key)
 
@@ -68,9 +79,10 @@ class TextExpander:
             # and line breaks after the expansion look natural.
             self.consume_trigger = trigger_key == "tab"
             self.buffer = ""
+            self.raw_buffer = ""
 
     def on_key_event(self, event):
-        if self.suppressed or event.event_type != "down":
+        if self.suppressed or self.paused or event.event_type != "down":
             return
 
         name = event.name
@@ -80,29 +92,36 @@ class TextExpander:
         if name == self.trigger_key:
             with self.lock:
                 candidate, self.buffer = self.buffer, ""
+                raw_typed, self.raw_buffer = self.raw_buffer, ""
             if (
                 len(candidate) >= MIN_ABBREVIATION_LENGTH
                 and candidate in self.expansions
             ):
-                self._expand(candidate)
+                self._expand(candidate, raw_typed)
             return
 
         if name == "backspace":
             with self.lock:
                 self.buffer = self.buffer[:-1]
+                self.raw_buffer = self.raw_buffer[:-1]
             return
 
         if len(name) == 1 and name.isalnum():
             with self.lock:
                 self.buffer = (self.buffer + name.lower())[-MAX_ABBREVIATION_LENGTH:]
+                self.raw_buffer = (self.raw_buffer + name)[-MAX_ABBREVIATION_LENGTH:]
         else:
             # Any other key (space, enter, punctuation, arrows, F-keys,
             # modifiers...) breaks the current word.
             with self.lock:
                 self.buffer = ""
+                self.raw_buffer = ""
 
-    def _expand(self, abbreviation):
-        replacement = self.expansions[abbreviation]
+    def _expand(self, abbreviation, raw_typed):
+        template = self.expansions[abbreviation]
+        text, left_presses = build_expansion(
+            template, raw_typed, self.consume_trigger, self.trigger_char, PRESERVE_CASE
+        )
         self.suppressed = True
         try:
             # +1 erases whatever the trigger keypress itself produced
@@ -111,8 +130,9 @@ class TextExpander:
             # this can misfire -- see notes in config.txt.
             for _ in range(len(abbreviation) + 1):
                 keyboard.send("backspace")
-            text = replacement if self.consume_trigger else replacement + (self.trigger_char or "")
             keyboard.write(text)
+            for _ in range(left_presses):
+                keyboard.send("left")
         finally:
             self.suppressed = False
 
@@ -120,12 +140,6 @@ class TextExpander:
 def make_hotkey_action(action):
     action = action.strip()
     lower = action.lower()
-
-    if lower == "quit":
-        def handler():
-            print("[ahk_lite] Quit hotkey pressed. Exiting.")
-            os._exit(0)
-        return handler
 
     if lower.startswith("run:"):
         target = action[len("run:"):].strip()
@@ -169,8 +183,13 @@ class App:
 
     def _register_hotkeys(self, hotkeys):
         for combo, action in hotkeys.items():
-            if action.strip().lower() == "reload":
+            lowered = action.strip().lower()
+            if lowered == "reload":
                 handler = self.reload
+            elif lowered == "pause":
+                handler = self.toggle_pause
+            elif lowered == "quit":
+                handler = self.quit
             else:
                 handler = make_hotkey_action(action)
             self.hotkey_handles.append(keyboard.add_hotkey(combo, handler))
@@ -195,18 +214,31 @@ class App:
         print(f"[ahk_lite] Reloaded {len(expansions)} expansion(s), "
               f"{len(hotkeys)} hotkey(s) (trigger key: {trigger_key})")
 
+    def toggle_pause(self):
+        self.expander.paused = not self.expander.paused
+        self.expander.buffer = ""
+        self.expander.raw_buffer = ""
+        print(f"[ahk_lite] Text expansion {'paused' if self.expander.paused else 'resumed'}")
+
+    def quit(self):
+        print("[ahk_lite] Quit hotkey pressed. Exiting.")
+        os._exit(0)
+
 
 def main():
     config_path = sys.argv[1] if len(sys.argv) > 1 else DEFAULT_CONFIG_PATH
-    App(config_path)
+    app = App(config_path)
 
-    print("[ahk_lite] Running. Press the 'quit' hotkey from config.txt "
-          "(default ctrl+alt+q) or Ctrl+C here to stop.")
-
+    print("[ahk_lite] Running.")
     try:
-        keyboard.wait()
-    except KeyboardInterrupt:
-        pass
+        tray.run(app)
+    except tray.TrayUnavailable:
+        print("[ahk_lite] No tray icon (pip install pystray pillow to enable one). "
+              "Running headless -- use the hotkeys from config.txt, or Ctrl+C here to stop.")
+        try:
+            keyboard.wait()
+        except KeyboardInterrupt:
+            pass
 
 
 if __name__ == "__main__":

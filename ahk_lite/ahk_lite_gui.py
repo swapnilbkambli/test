@@ -157,12 +157,12 @@ class ConfigEditor(tk.Tk):
         expansions_tab = EntryTab(
             notebook, config_path, section="expansions",
             key_label="Abbreviation", value_label="Expansion text",
-            value_hint="Use \\n for a newline, \\t for a tab.",
+            value_hint="\\n newline, \\t tab, {cursor} place cursor, {date} {time} {datetime}",
         )
         hotkeys_tab = EntryTab(
             notebook, config_path, section="hotkeys",
             key_label="Hotkey (e.g. ctrl+alt+n)", value_label="Action",
-            value_hint="run:<path>  |  open:<url>  |  type:<text>  |  reload  |  quit",
+            value_hint="run:<path>  |  open:<url>  |  type:<text>  |  reload  |  pause  |  quit",
         )
         notebook.add(expansions_tab, text="Text expansions")
         notebook.add(hotkeys_tab, text="Hotkeys")

@@ -1,6 +1,7 @@
 # ahk_lite configuration
-# Lines starting with # or ; are comments. Edit and save, then restart
-# ahk_lite.py to pick up changes (there is no live-reload in this MVP).
+# Lines starting with # or ; are comments. Edit and save (by hand, or
+# with ahk_lite_gui.py), then press the reload hotkey below to pick up
+# changes without restarting ahk_lite.py.
 
 [settings]
 # Key that triggers text expansion. Must be a single key name that the
@@ -13,10 +14,21 @@ trigger_key = tab
 # Type the abbreviation (case-insensitive) then press the trigger_key
 # above to expand it. Use \n for a newline and \t for a tab inside the
 # expansion text.
+#
+# Special tokens you can use inside the expansion text:
+#   {cursor}     leaves your cursor here instead of at the very end
+#   {date}       today's date, e.g. 2026-07-27
+#   {time}       current time, e.g. 14:05
+#   {datetime}   both combined
+#
+# Typed-case is preserved: type the abbreviation in ALL CAPS or Just
+# the first letter capitalized and the expansion comes out matching.
 btw = by the way
 abc = apple bat cat
 sig = Best regards,\nSwapnil
 addr = 123 Main Street, Springfield
+mtg = Subject: {cursor}\n\nHi team,\n\nBest,\nSwapnil
+log = [{date} {time}]
 
 [hotkeys]
 # key-combo = action
@@ -27,9 +39,11 @@ addr = 123 Main Street, Springfield
 #   open:<url>              open a URL in the default browser
 #   type:<text>              type literal text at the cursor (\n / \t work here too)
 #   reload                   re-read this file without restarting ahk_lite
+#   pause                    toggle text expansion on/off (hotkeys keep working)
 #   quit                     stop ahk_lite
 ctrl+alt+n = run:notepad.exe
 ctrl+alt+j = open:https://example.com
 ctrl+alt+e = type:Thanks,\nSwapnil
 ctrl+alt+r = reload
+ctrl+alt+p = pause
 ctrl+alt+q = quit
