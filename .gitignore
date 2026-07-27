@@ -1,0 +1,9 @@
+# macOS / exFAT AppleDouble sidecar files (T7 drive shadows any file with xattrs)
+._*
+.DS_Store
+.Spotlight-V100
+.Trashes
+
+# Python
+__pycache__/
+*.pyc
