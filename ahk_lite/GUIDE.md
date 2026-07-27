@@ -29,20 +29,29 @@ pip install --user -r requirements-tray.txt
 
 ## Running it
 
+This is the only command you need day to day:
+
 ```bash
 python ahk_lite.py                        # run the daemon (uses config.txt next to this file)
 python ahk_lite.py C:\path\to\config.txt   # ...or point it at a different config file
+```
 
-python ahk_lite.py --gui                   # open the config editor instead
+The first time it runs, it also registers itself to start automatically at the next Windows login (no admin rights needed, and nothing extra to run for that — it just happens). If you ever want to stop that:
+
+```bash
+python ahk_lite.py --remove-startup
+```
+
+The config editor is reachable two ways: from the tray icon's "Open editor" item while the daemon is running, or directly:
+
+```bash
+python ahk_lite.py --gui
 python ahk_lite.py --gui C:\path\to\config.txt
-
-python ahk_lite.py --install-startup       # start ahk_lite automatically at login (no admin needed)
-python ahk_lite.py --remove-startup        # undo that
 ```
 
 The daemon and the GUI are separate processes — you can run both at once, pointed at the same `config.txt`.
 
-If `pystray`/`Pillow` are installed, the daemon shows a tray icon and the console window can be closed (launch with `pythonw.exe` instead of `python.exe`, or use `--install-startup`, for no console at all). If not, it runs headless in the console, driven entirely by hotkeys.
+If `pystray`/`Pillow` are installed, the daemon shows a tray icon and the console window can be closed (launch with `pythonw.exe` instead of `python.exe` for no console at all — the auto-installed startup shortcut already does this). If not, it runs headless in the console, driven entirely by hotkeys.
 
 ## config.txt format
 
@@ -119,24 +128,17 @@ If `pystray`/`Pillow` are installed, running the daemon shows a small tray icon 
 - **Reload config**
 - **Pause expansion** (checkbox, reflects current state)
 - **Open editor** — launches `python ahk_lite.py --gui` pointed at the same config file
-- **Add to Windows startup** — same as running `--install-startup`
 - **Quit**
 
 If those packages aren't installed, the daemon just prints a note and falls back to running headless in the console — nothing breaks.
 
 ## Auto-start at Windows login
 
-```bash
-python ahk_lite.py --install-startup
-```
-
-Drops a small VBScript launcher into your Startup folder (`%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup`) that runs the daemon hidden via `pythonw.exe` at every login. No admin rights needed — it's a per-user folder. Undo with:
+Automatic — nothing to run. The first time `python ahk_lite.py` starts the daemon, it drops a small VBScript launcher into your Startup folder (`%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup`) that runs the daemon hidden via `pythonw.exe` at every login. No admin rights needed — it's a per-user folder, and every run after the first is a silent no-op (it only writes the launcher if it isn't already there). To undo it:
 
 ```bash
 python ahk_lite.py --remove-startup
 ```
-
-(Or use the tray icon's "Add to Windows startup" menu item instead.)
 
 ## How expansion actually works (and its one real caveat)
 

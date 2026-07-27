@@ -6,21 +6,25 @@ Setup (once):
     pip install --user keyboard
     pip install --user pystray pillow   # optional, for the tray icon
 
-Run the daemon (default mode):
+Run the daemon (default mode -- this is the only command you need for
+normal use):
     python ahk_lite.py                 # uses config.txt next to this file
     python ahk_lite.py C:\\path\\to\\config.txt
 
-Run the config editor GUI instead:
-    python ahk_lite.py --gui
-    python ahk_lite.py --gui C:\\path\\to\\config.txt
-
-Add / remove ahk_lite from Windows startup (no admin rights needed):
-    python ahk_lite.py --install-startup
+The first time it runs, it also registers itself to start automatically
+at Windows login (no admin rights needed) -- nothing extra to run for
+that. If you ever want to undo it:
     python ahk_lite.py --remove-startup
 
+Run the config editor GUI instead of the daemon:
+    python ahk_lite.py --gui
+    python ahk_lite.py --gui C:\\path\\to\\config.txt
+(also reachable from the tray icon's "Open editor" menu item, if the
+daemon is already running)
+
 To run the daemon without a console window once you've tested it,
-launch it with pythonw.exe instead of python.exe, or use
---install-startup, which does that for you automatically.
+launch it with pythonw.exe instead of python.exe -- the auto-installed
+startup shortcut already does this for you.
 
 Edit config.txt (by hand, or with --gui) at any time and use the
 "reload" hotkey (default ctrl+alt+r) to pick up the changes without
@@ -548,13 +552,6 @@ def run_tray(app):
     def on_open_editor(icon, item):
         subprocess.Popen([sys.executable, os.path.abspath(__file__), "--gui", app.config_path])
 
-    def on_install_startup(icon, item):
-        try:
-            path = install_startup()
-            print(f"[ahk_lite] Startup shortcut installed: {path}")
-        except Exception as exc:
-            print(f"[ahk_lite] Could not install startup shortcut: {exc}")
-
     def on_quit(icon, item):
         icon.stop()
         app.quit()
@@ -566,7 +563,6 @@ def run_tray(app):
         pystray.MenuItem("Reload config", on_reload),
         pystray.MenuItem("Pause expansion", on_toggle_pause, checked=is_paused),
         pystray.MenuItem("Open editor", on_open_editor),
-        pystray.MenuItem("Add to Windows startup", on_install_startup),
         pystray.MenuItem("Quit", on_quit),
     )
     icon = pystray.Icon("ahk_lite", _make_icon_image(paused=False), "ahk_lite", menu)
@@ -614,6 +610,27 @@ def remove_startup():
         os.remove(vbs_path)
         return vbs_path
     return None
+
+
+def ensure_startup_installed():
+    """Called automatically every time the daemon starts. Registers
+    ahk_lite for Windows login on the very first run and is then a
+    silent no-op on every run after that -- nothing to remember to run
+    separately. Does nothing (silently) on non-Windows, since
+    _startup_folder() only works where APPDATA exists."""
+    try:
+        folder = _startup_folder()
+    except RuntimeError:
+        return
+    vbs_path = os.path.join(folder, STARTUP_LAUNCHER_NAME)
+    if os.path.exists(vbs_path):
+        return
+    try:
+        install_startup()
+        print("[ahk_lite] Added to Windows startup -- will launch automatically at login.")
+        print("[ahk_lite] To undo: python ahk_lite.py --remove-startup")
+    except Exception as exc:
+        print(f"[ahk_lite] Could not add to Windows startup (non-fatal): {exc}")
 
 
 # =====================================================================
@@ -783,6 +800,7 @@ def run_daemon(config_path):
         print("[ahk_lite] Install it with: pip install --user keyboard")
         sys.exit(1)
 
+    ensure_startup_installed()
     app = App(config_path)
     print("[ahk_lite] Running.")
     try:
@@ -804,16 +822,9 @@ def main():
     parser = argparse.ArgumentParser(description="ahk_lite - text expansion + hotkeys")
     parser.add_argument("config", nargs="?", default=DEFAULT_CONFIG_PATH, help="path to config.txt")
     parser.add_argument("--gui", action="store_true", help="open the config editor instead of running the daemon")
-    parser.add_argument("--install-startup", action="store_true", help="add ahk_lite to Windows startup and exit")
-    parser.add_argument("--remove-startup", action="store_true", help="remove ahk_lite from Windows startup and exit")
+    parser.add_argument("--remove-startup", action="store_true",
+                         help="stop ahk_lite from starting automatically at Windows login")
     args = parser.parse_args()
-
-    if args.install_startup:
-        path = install_startup()
-        print(f"[ahk_lite] Installed startup launcher: {path}")
-        print("[ahk_lite] ahk_lite will now start automatically at login.")
-        print("[ahk_lite] To undo: python ahk_lite.py --remove-startup")
-        return
 
     if args.remove_startup:
         removed = remove_startup()
