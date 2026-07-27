@@ -13,19 +13,24 @@ pythonw.exe instead of python.exe, and add a shortcut to it in:
     shell:startup
 so it starts automatically when you log in.
 
+Edit config.txt (by hand, or with ahk_lite_gui.py) at any time and press
+the "reload" hotkey configured there (default ctrl+alt+r) to pick up the
+changes without restarting.
+
 Everything is processed in memory only: typed characters are held in a
 short rolling buffer used purely to detect abbreviations, never written
 to disk or sent anywhere, and the buffer is cleared as soon as a word
 boundary is hit.
 """
 
-import configparser
 import os
 import sys
 import threading
 import webbrowser
 
 import keyboard
+
+import config_store
 
 DEFAULT_CONFIG_PATH = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "config.txt"
@@ -39,36 +44,6 @@ MAX_ABBREVIATION_LENGTH = 40
 TRIGGER_CHARS = {"space": " ", "enter": "\n", "tab": "\t"}
 
 
-def unescape(text):
-    return text.replace("\\n", "\n").replace("\\t", "\t")
-
-
-def load_config(path):
-    parser = configparser.ConfigParser(
-        delimiters=("=",), inline_comment_prefixes=("#", ";")
-    )
-    parser.optionxform = str  # preserve case of keys as written in the file
-    if not os.path.exists(path):
-        raise FileNotFoundError(f"Config file not found: {path}")
-    parser.read(path, encoding="utf-8")
-
-    trigger_key = "tab"
-    if parser.has_section("settings"):
-        trigger_key = parser.get("settings", "trigger_key", fallback="tab").strip().lower()
-
-    expansions = {}
-    if parser.has_section("expansions"):
-        for key, value in parser.items("expansions"):
-            expansions[key.strip().lower()] = unescape(value)
-
-    hotkeys = {}
-    if parser.has_section("hotkeys"):
-        for key, value in parser.items("hotkeys"):
-            hotkeys[key.strip()] = unescape(value.strip())
-
-    return trigger_key, expansions, hotkeys
-
-
 class TextExpander:
     """Watches keystrokes for a known abbreviation, then backspaces over
     it and types the expansion. Does not use a suppressing hook: the
@@ -78,16 +53,21 @@ class TextExpander:
     expansions."""
 
     def __init__(self, expansions, trigger_key):
-        self.expansions = expansions
-        self.trigger_key = trigger_key
-        self.trigger_char = TRIGGER_CHARS.get(trigger_key)
-        # Only "tab" is consumed by default: it rarely carries meaning as
-        # typed content. Space/enter are replayed so sentence flow and
-        # line breaks after the expansion look natural.
-        self.consume_trigger = trigger_key == "tab"
-        self.buffer = ""
         self.lock = threading.Lock()
+        self.buffer = ""
         self.suppressed = False  # guards against reacting to our own synthetic typing
+        self.set_config(expansions, trigger_key)
+
+    def set_config(self, expansions, trigger_key):
+        with self.lock:
+            self.expansions = expansions
+            self.trigger_key = trigger_key
+            self.trigger_char = TRIGGER_CHARS.get(trigger_key)
+            # Only "tab" is consumed by default: it rarely carries meaning
+            # as typed content. Space/enter are replayed so sentence flow
+            # and line breaks after the expansion look natural.
+            self.consume_trigger = trigger_key == "tab"
+            self.buffer = ""
 
     def on_key_event(self, event):
         if self.suppressed or event.event_type != "down":
@@ -128,7 +108,7 @@ class TextExpander:
             # +1 erases whatever the trigger keypress itself produced
             # (e.g. a tab character). In apps where the trigger key moves
             # focus instead of inserting a character (some dialogs/forms),
-            # this can misfire -- see README notes in config.txt.
+            # this can misfire -- see notes in config.txt.
             for _ in range(len(abbreviation) + 1):
                 keyboard.send("backspace")
             text = replacement if self.consume_trigger else replacement + (self.trigger_char or "")
@@ -173,19 +153,53 @@ def make_hotkey_action(action):
     return handler
 
 
+class App:
+    def __init__(self, config_path):
+        self.config_path = config_path
+        self.hotkey_handles = []
+
+        trigger_key, expansions, hotkeys = config_store.load_config(config_path)
+        self.expander = TextExpander(expansions, trigger_key)
+        keyboard.on_press(self.expander.on_key_event)
+        self._register_hotkeys(hotkeys)
+
+        print(f"[ahk_lite] Loaded {len(expansions)} expansion(s), "
+              f"{len(hotkeys)} hotkey(s) from {config_path}")
+        print(f"[ahk_lite] Expansion trigger key: {trigger_key}")
+
+    def _register_hotkeys(self, hotkeys):
+        for combo, action in hotkeys.items():
+            if action.strip().lower() == "reload":
+                handler = self.reload
+            else:
+                handler = make_hotkey_action(action)
+            self.hotkey_handles.append(keyboard.add_hotkey(combo, handler))
+
+    def reload(self):
+        try:
+            trigger_key, expansions, hotkeys = config_store.load_config(self.config_path)
+        except Exception as exc:
+            print(f"[ahk_lite] Reload failed, keeping previous config: {exc}")
+            return
+
+        self.expander.set_config(expansions, trigger_key)
+
+        for handle in self.hotkey_handles:
+            try:
+                keyboard.remove_hotkey(handle)
+            except (KeyError, ValueError):
+                pass
+        self.hotkey_handles = []
+        self._register_hotkeys(hotkeys)
+
+        print(f"[ahk_lite] Reloaded {len(expansions)} expansion(s), "
+              f"{len(hotkeys)} hotkey(s) (trigger key: {trigger_key})")
+
+
 def main():
     config_path = sys.argv[1] if len(sys.argv) > 1 else DEFAULT_CONFIG_PATH
-    trigger_key, expansions, hotkeys = load_config(config_path)
+    App(config_path)
 
-    expander = TextExpander(expansions, trigger_key)
-    keyboard.on_press(expander.on_key_event)
-
-    for combo, action in hotkeys.items():
-        keyboard.add_hotkey(combo, make_hotkey_action(action))
-
-    print(f"[ahk_lite] Loaded {len(expansions)} expansion(s), "
-          f"{len(hotkeys)} hotkey(s) from {config_path}")
-    print(f"[ahk_lite] Expansion trigger key: {trigger_key}")
     print("[ahk_lite] Running. Press the 'quit' hotkey from config.txt "
           "(default ctrl+alt+q) or Ctrl+C here to stop.")
 

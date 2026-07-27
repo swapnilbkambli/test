@@ -26,8 +26,10 @@ addr = 123 Main Street, Springfield
 #   run:<path or command>   launch a program, or open a file/folder
 #   open:<url>              open a URL in the default browser
 #   type:<text>              type literal text at the cursor (\n / \t work here too)
+#   reload                   re-read this file without restarting ahk_lite
 #   quit                     stop ahk_lite
 ctrl+alt+n = run:notepad.exe
 ctrl+alt+j = open:https://example.com
 ctrl+alt+e = type:Thanks,\nSwapnil
+ctrl+alt+r = reload
 ctrl+alt+q = quit
