@@ -2,24 +2,19 @@
 
 A minimal, script-based replacement for two AutoHotkey features — text
 expansion and global hotkeys — for machines where you can't install AHK
-itself (e.g. a locked-down corporate Windows laptop). Everything is
-plain Python, driven by one editable text file.
+itself (e.g. a locked-down corporate Windows laptop). Everything is one
+Python file, driven by one editable config text file.
 
 ## Files
 
+Just two files matter:
+
 | File | What it's for |
 |---|---|
-| `ahk_lite.py` | The daemon. Run this — it's the thing that actually watches your keystrokes and reacts. |
-| `config_store.py` | Shared read/write logic for `config.txt`. Required by everything else; you never run it directly. |
-| `expansion_logic.py` | Pure text logic for building an expansion (tokens, case, cursor placement). Required by `ahk_lite.py`; you never run it directly. |
-| `tray.py` | Optional system tray icon. Required by `ahk_lite.py`'s import, but degrades gracefully if `pystray`/`Pillow` aren't installed. |
-| `install_startup.py` | One-off helper to make `ahk_lite.py` start automatically at Windows login. |
-| `ahk_lite_gui.py` | Optional GUI for editing `config.txt` without hand-editing it. |
+| `ahk_lite.py` | Everything: the daemon, the GUI editor, the tray icon, the startup installer. One file, dispatched by command-line flags (see below). |
 | `config.txt` | Your actual shortcuts and expansions. Edit this to whatever you want — the shipped version is just a sample. |
-| `requirements.txt` | Core dependency (`keyboard`). |
-| `requirements-tray.txt` | Optional dependency for the tray icon (`pystray`, `pillow`). |
 
-All five `.py` files need to stay in the same folder — they import each other.
+`requirements.txt` (core) and `requirements-tray.txt` (optional, for the tray icon) just list pip packages — nothing to copy to the file system, just to run `pip install -r` against.
 
 ## Setup (Windows)
 
@@ -32,16 +27,26 @@ Optional, for the tray icon:
 pip install --user -r requirements-tray.txt
 ```
 
-Run it:
+## Running it
+
 ```bash
-python ahk_lite.py
+python ahk_lite.py                        # run the daemon (uses config.txt next to this file)
+python ahk_lite.py C:\path\to\config.txt   # ...or point it at a different config file
+
+python ahk_lite.py --gui                   # open the config editor instead
+python ahk_lite.py --gui C:\path\to\config.txt
+
+python ahk_lite.py --install-startup       # start ahk_lite automatically at login (no admin needed)
+python ahk_lite.py --remove-startup        # undo that
 ```
 
-If `pystray`/`Pillow` are installed, you'll get a tray icon and the console window can be closed (launch with `pythonw.exe` instead of `python.exe` for no console at all). If not, it runs headless in the console and you drive it entirely with hotkeys.
+The daemon and the GUI are separate processes — you can run both at once, pointed at the same `config.txt`.
+
+If `pystray`/`Pillow` are installed, the daemon shows a tray icon and the console window can be closed (launch with `pythonw.exe` instead of `python.exe`, or use `--install-startup`, for no console at all). If not, it runs headless in the console, driven entirely by hotkeys.
 
 ## config.txt format
 
-Three sections. Comments (`#` or `;`) and blank lines are yours to keep — both `ahk_lite.py`'s reload and `ahk_lite_gui.py`'s saves only ever touch the one line being changed, never rewrite the file, so your formatting and notes always survive.
+Three sections. Comments (`#` or `;`) and blank lines are yours to keep — every write path (reload, GUI saves, enable/disable) only ever touches the one line being changed, never rewrites the file, so your formatting and notes always survive.
 
 ### `[settings]`
 
@@ -70,7 +75,7 @@ Type the abbreviation (case-insensitive matching) then the trigger key to expand
 - `{time}` — current time (`14:05`)
 - `{datetime}` — both combined
 
-**Case preservation**: type the abbreviation as `ABC` and the expansion comes out upper-cased; type `Abc` and just the first letter of the expansion is capitalized; type `abc` (or mixed case) and it comes out exactly as written in `config.txt`. This depends on the `keyboard` library reporting real letter case from your keystrokes, which isn't fully verified on Windows yet — if it doesn't seem to do anything, that's why, and it's harmless either way (it just stays inert rather than misbehaving). To turn it off entirely, set `PRESERVE_CASE = False` near the top of `ahk_lite.py`.
+**Case preservation**: type the abbreviation as `ABC` and the expansion comes out upper-cased; type `Abc` and just the first letter of the expansion is capitalized; type `abc` (or mixed case) and it comes out exactly as written in `config.txt`. This depends on the `keyboard` library reporting real letter case from your keystrokes, which isn't fully verified on Windows yet — if it doesn't seem to do anything, that's why, and it's harmless either way. To turn it off entirely, set `PRESERVE_CASE = False` near the top of `ahk_lite.py`.
 
 ### `[hotkeys]`
 
@@ -89,43 +94,49 @@ Modifiers: `ctrl`, `alt`, `shift`, `windows`, combined with `+` (e.g. `ctrl+alt+
 | `pause` | Toggle text expansion on/off (hotkeys keep working while paused) |
 | `quit` | Stop ahk_lite |
 
-## The GUI editor (`ahk_lite_gui.py`)
+### Disabling an entry without deleting it
+
+A line written as `#key = value` — **no space** after the `#` — is a *disabled* entry: it still shows up in the GUI (greyed out, marked "disabled") so you can bring it back later, but the daemon ignores it completely, exactly as if it didn't exist.
+
+This is deliberately different from an ordinary comment, which always has a space after the `#` (`# like this`, including every explanatory comment already in this file). That's not a coincidence — it's how the GUI's Enable/Disable button avoids ever mistaking your notes for a real (if disabled) shortcut. Hand-editing the file, just remove/add that one `#` yourself to the same effect.
+
+## The GUI editor
 
 ```bash
-python ahk_lite_gui.py
+python ahk_lite.py --gui
 ```
 
-Two tabs — Text expansions, Hotkeys — each a table with Save/Update, Delete, and a form to add new rows. It writes back to `config.txt` using the same line-preserving logic as reload, so nothing you've hand-written in the file gets clobbered.
+Two tabs — Text expansions, Hotkeys — each a table with **Save/Update**, **Enable/Disable**, **Delete**, and a form to add new rows. A disabled row shows greyed out with "disabled" in the Status column; selecting it and clicking Enable/Disable brings it back. Editing the value of a disabled row (Save/Update) keeps it disabled — the enabled/disabled state and the value are independent.
 
-If `config.txt` has a hotkey mapped to `reload` (the sample does, `ctrl+alt+r`), every save from the GUI also replays that hotkey — if `ahk_lite.py` is already running, it picks up the change immediately, no manual reload needed.
+It writes back to `config.txt` using the same line-preserving logic as reload, so nothing you've hand-written in the file gets clobbered.
 
-The GUI and the daemon are separate processes and can run at the same time, both pointed at the same `config.txt`.
+If `config.txt` has a hotkey mapped to `reload` (the sample does, `ctrl+alt+r`), every save/delete/toggle from the GUI also replays that hotkey — if `ahk_lite.py` is already running, it picks up the change immediately, no manual reload needed.
 
 ## Tray icon
 
-If `pystray`/`Pillow` are installed, `ahk_lite.py` shows a small tray icon (green = active, grey = paused) instead of just a bare console. Right-click menu:
+If `pystray`/`Pillow` are installed, running the daemon shows a small tray icon (green = active, grey = paused) instead of just a bare console. Right-click menu:
 
 - **Reload config**
 - **Pause expansion** (checkbox, reflects current state)
-- **Open editor** — launches `ahk_lite_gui.py` pointed at the same config file
-- **Add to Windows startup** — runs `install_startup.py`'s installer for you
+- **Open editor** — launches `python ahk_lite.py --gui` pointed at the same config file
+- **Add to Windows startup** — same as running `--install-startup`
 - **Quit**
 
-If those packages aren't installed, `ahk_lite.py` just prints a note and falls back to running headless in the console — nothing breaks.
+If those packages aren't installed, the daemon just prints a note and falls back to running headless in the console — nothing breaks.
 
 ## Auto-start at Windows login
 
 ```bash
-python install_startup.py
+python ahk_lite.py --install-startup
 ```
 
-Drops a small VBScript launcher into your Startup folder (`%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup`) that runs `ahk_lite.py` hidden via `pythonw.exe` at every login. No admin rights needed — it's a per-user folder. Undo with:
+Drops a small VBScript launcher into your Startup folder (`%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup`) that runs the daemon hidden via `pythonw.exe` at every login. No admin rights needed — it's a per-user folder. Undo with:
 
 ```bash
-python install_startup.py --remove
+python ahk_lite.py --remove-startup
 ```
 
-(Or just do it from the tray icon's "Add to Windows startup" menu item instead.)
+(Or use the tray icon's "Add to Windows startup" menu item instead.)
 
 ## How expansion actually works (and its one real caveat)
 
@@ -137,8 +148,8 @@ Also: typed characters are only ever held in a short in-memory buffer to check f
 
 ## Troubleshooting
 
-- **Nothing happens when I type an abbreviation** — check `trigger_key` in `config.txt` matches what you're actually pressing, and that the abbreviation is at least 2 characters.
+- **Nothing happens when I type an abbreviation** — check `trigger_key` in `config.txt` matches what you're actually pressing, that the entry isn't disabled (see above), and that the abbreviation is at least 2 characters.
 - **Windows dialogs eat my Tab keystroke oddly** — see the Tab caveat above; switch `trigger_key` to `space` or `f8`.
 - **`run:` hotkey does nothing on Mac** — `os.startfile` is Windows-only by design; this tool targets the Windows laptop, macOS is only useful here for testing the GUI/config-editing pieces (see below).
 - **`ModuleNotFoundError: No module named 'keyboard'` after installing it** — you likely installed it into a different Python than the one running the script (common with `sudo` resetting PATH on Mac, or multiple Pythons on Windows). Check `pip show keyboard` and make sure you're running the *same* interpreter you installed into.
-- **On macOS**: the `keyboard` library needs root or Input Monitoring permission to actually tap keyboard events (`OSError: Error 13 - Must be run as administrator` otherwise), and `run:` hotkeys don't work at all. The GUI (`ahk_lite_gui.py`) itself needs neither — it's a plain Tkinter form and works normally without `sudo`.
+- **On macOS**: the `keyboard` library needs root or Input Monitoring permission to actually tap keyboard events (`OSError: Error 13 - Must be run as administrator` otherwise), and `run:` hotkeys don't work at all. `python ahk_lite.py --gui` needs neither — it's a plain Tkinter form and works normally without `sudo`.

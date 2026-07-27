@@ -1,7 +1,11 @@
 # ahk_lite configuration
 # Lines starting with # or ; are comments. Edit and save (by hand, or
-# with ahk_lite_gui.py), then press the reload hotkey below to pick up
-# changes without restarting ahk_lite.py.
+# with `python ahk_lite.py --gui`), then press the reload hotkey below
+# to pick up changes without restarting ahk_lite.py.
+#
+# A line like "#key = value" (no space after #) means that entry is
+# disabled -- the GUI's Enable/Disable button toggles this. It's still
+# shown (greyed out) in the GUI, but ignored by the running daemon.
 
 [settings]
 # Key that triggers text expansion. Must be a single key name that the
